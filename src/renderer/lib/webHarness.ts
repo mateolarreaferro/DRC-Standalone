@@ -166,14 +166,15 @@ ${STYLES}
     </div>
   </div>
 
+  <div id="controls" class="controls"></div>
+
   <div id="keyboard" class="keyboard" hidden>
     <div class="kb-label">Piano keyboard — click keys or use your computer keyboard</div>
     <div class="piano-scroll">
       <div id="keys" class="piano"></div>
     </div>
+    <div id="octaveLabels" class="piano-octaves"></div>
   </div>
-
-  <div id="controls" class="controls"></div>
 </div>
 
 <div id="studyOverlay" class="study-overlay" hidden>
@@ -323,53 +324,63 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .keyboard {
-  margin-top: 20px; background: ${THEME.panel};
+  margin-top: 16px; background: ${THEME.panel};
   border: 1px solid ${THEME.border}; border-radius: 14px; padding: 18px;
 }
 .kb-label { font-size: 0.74em; letter-spacing: .12em; text-transform: uppercase; color: ${THEME.muted}; margin-bottom: 12px; }
 .piano-scroll {
-  overflow-x: auto; overflow-y: hidden; padding-bottom: 4px;
+  overflow-x: auto; overflow-y: hidden; padding-bottom: 2px;
   -webkit-overflow-scrolling: touch;
 }
 .piano {
-  position: relative; height: 118px; margin: 0 auto;
+  position: relative; height: 100px; margin: 0 auto;
   user-select: none;
 }
 .piano .key {
-  position: absolute; bottom: 0;
+  position: absolute; top: 0; bottom: auto;
   display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-  padding-bottom: 6px; gap: 2px;
-  cursor: pointer; user-select: none;
+  padding-bottom: 8px;
+  cursor: pointer; user-select: none; box-sizing: border-box;
   transition: background .05s, box-shadow .05s, transform .05s;
 }
 .piano .key.white {
-  width: 36px; height: 118px;
-  background: linear-gradient(180deg, #eceae4 0%, #d8d6d0 100%);
+  width: 31px; height: 100px;
+  background: linear-gradient(to bottom, #eceae4 0%, #d8d6d0 100%);
   border: 1px solid ${THEME.border}; border-top: none;
-  border-radius: 0 0 5px 5px; z-index: 1;
+  border-radius: 0 0 4px 4px; z-index: 1;
   color: #4a4a48;
 }
-.piano .key.white:hover { background: linear-gradient(180deg, #f5f3ed 0%, #e0ded8 100%); }
+.piano .key.white:hover { background: linear-gradient(to bottom, #f5f3ed 0%, #e0ded8 100%); }
 .piano .key.white.active {
-  background: linear-gradient(180deg, ${THEME.accent} 0%, #5a9a86 100%);
+  background: linear-gradient(to bottom, ${THEME.accent} 0%, #5a9a86 100%);
   color: #0d0d0c; transform: translateY(1px);
   box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);
 }
 .piano .key.black {
-  width: 22px; height: 72px;
-  background: linear-gradient(180deg, #2a2a28 0%, #121210 100%);
+  width: 20px; height: 62px;
+  background: linear-gradient(to bottom, #2a2a28 0%, #121210 100%);
   border: 1px solid #0a0a09; border-top: none;
-  border-radius: 0 0 4px 4px; z-index: 2;
-  color: #888880; padding-bottom: 4px;
+  border-radius: 0 0 3px 3px; z-index: 2;
+  color: #888880; padding-bottom: 5px;
 }
-.piano .key.black:hover { background: linear-gradient(180deg, #353533 0%, #1a1a18 100%); }
+.piano .key.black:hover { background: linear-gradient(to bottom, #353533 0%, #1a1a18 100%); }
 .piano .key.black.active {
-  background: linear-gradient(180deg, #6a9a88 0%, #3d5a50 100%);
+  background: linear-gradient(to bottom, #6a9a88 0%, #3d5a50 100%);
   color: #e8f5f0; transform: translateY(1px);
   box-shadow: inset 0 2px 6px rgba(0,0,0,0.3);
 }
-.piano .key-name { font-size: 0.58em; opacity: .75; line-height: 1; }
-.piano .key-bind { font-size: 0.68em; font-weight: 700; opacity: .9; line-height: 1; }
+.piano .key-bind {
+  font-size: 9px; font-weight: 700;
+  font-family: "SF Mono", "Fira Code", ui-monospace, monospace;
+  opacity: .85; line-height: 1; pointer-events: none;
+}
+.piano-octaves {
+  position: relative; height: 16px; margin: 4px auto 0;
+  font-size: 10px;
+  font-family: "SF Mono", "Fira Code", ui-monospace, monospace;
+  color: ${THEME.muted};
+}
+.piano-octaves span { position: absolute; top: 2px; }
 
 .study-overlay {
   position: fixed; inset: 0; z-index: 1000;
@@ -654,13 +665,19 @@ function stopVisualizer() {
   if (vizPanel) vizPanel.hidden = true;
 }
 
-// ── Piano keyboard (3 octaves, C3–B5 — matches Dr.C Player) ───────────────
-var NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+// ── Piano keyboard (3 octaves — matches Dr.C Player PianoKeyboard.tsx) ────
 var PIANO_START_OCT = 3;
 var PIANO_OCTAVES = 3;
 var LOW_MIDI = PIANO_START_OCT * 12;
 var HIGH_MIDI = (PIANO_START_OCT + PIANO_OCTAVES) * 12 - 1;
-var WHITE_W = 36;
+var WHITE_W = 32;
+var BLACK_SHIFT = 12;
+
+var PIANO_PATTERN = [
+  { t: "w", s: 0 }, { t: "b", s: 1 }, { t: "w", s: 2 }, { t: "b", s: 3 }, { t: "w", s: 4 },
+  { t: "w", s: 5 }, { t: "b", s: 6 }, { t: "w", s: 7 }, { t: "b", s: 8 }, { t: "w", s: 9 },
+  { t: "b", s: 10 }, { t: "w", s: 11 }
+];
 
 var MIDI_TO_KEY = {
   36:"q",37:"1",38:"2",39:"3",40:"4",41:"5",42:"6",43:"7",44:"8",45:"9",46:"0",47:"-",
@@ -686,7 +703,6 @@ function midiForKey(k) {
   return inRange[0];
 }
 
-function noteName(m) { return NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1); }
 function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 function tagFor(m) { return "1." + String(m).padStart(3, "0"); }
 
@@ -701,51 +717,43 @@ function bindKeyEl(el, midi) {
 function buildKeyboard() {
   keysEl.innerHTML = "";
   keysEl.className = "piano";
-  var whiteIdx = 0;
-  var whiteSemis = [0, 2, 4, 5, 7, 9, 11];
-  var blackAfterWhite = [
-    { semi: 1, offset: 0.65 },
-    { semi: 3, offset: 1.75 },
-    null,
-    { semi: 6, offset: 3.6 },
-    { semi: 8, offset: 4.7 },
-    { semi: 10, offset: 5.8 },
-    null
-  ];
+  var whiteCount = 0;
 
   for (var oct = 0; oct < PIANO_OCTAVES; oct++) {
-    var base = (PIANO_START_OCT + oct) * 12;
-    for (var wi = 0; wi < 7; wi++) {
-      var midiW = base + whiteSemis[wi];
-      var wEl = document.createElement("div");
-      wEl.className = "key white";
-      wEl.dataset.midi = String(midiW);
-      wEl.style.left = (whiteIdx * WHITE_W) + "px";
-      var wBind = keyLabelForMidi(midiW);
-      wEl.innerHTML = (wBind ? '<span class="key-bind">' + wBind + '</span>' : '') +
-        '<span class="key-name">' + noteName(midiW) + '</span>';
-      bindKeyEl(wEl, midiW);
-      keysEl.appendChild(wEl);
-      keyEls[midiW] = wEl;
+    for (var ki = 0; ki < PIANO_PATTERN.length; ki++) {
+      var spec = PIANO_PATTERN[ki];
+      var midi = (PIANO_START_OCT + oct) * 12 + spec.s;
+      var el = document.createElement("div");
+      el.className = "key " + (spec.t === "w" ? "white" : "black");
+      el.dataset.midi = String(midi);
 
-      var spec = blackAfterWhite[wi];
-      if (spec) {
-        var midiB = base + spec.semi;
-        var bEl = document.createElement("div");
-        bEl.className = "key black";
-        bEl.dataset.midi = String(midiB);
-        bEl.style.left = (whiteIdx * WHITE_W + spec.offset * WHITE_W - 11) + "px";
-        var bBind = keyLabelForMidi(midiB);
-        bEl.innerHTML = (bBind ? '<span class="key-bind">' + bBind + '</span>' : '') +
-          '<span class="key-name">' + noteName(midiB) + '</span>';
-        bindKeyEl(bEl, midiB);
-        keysEl.appendChild(bEl);
-        keyEls[midiB] = bEl;
+      if (spec.t === "w") {
+        el.style.left = (whiteCount * WHITE_W) + "px";
+        whiteCount++;
+      } else {
+        el.style.left = (whiteCount * WHITE_W - BLACK_SHIFT) + "px";
       }
-      whiteIdx++;
+
+      var bind = keyLabelForMidi(midi);
+      if (bind) el.innerHTML = '<span class="key-bind">' + bind + '</span>';
+      bindKeyEl(el, midi);
+      keysEl.appendChild(el);
+      keyEls[midi] = el;
     }
   }
-  keysEl.style.width = (whiteIdx * WHITE_W) + "px";
+  keysEl.style.width = (whiteCount * WHITE_W) + "px";
+
+  var octEl = document.getElementById("octaveLabels");
+  if (octEl) {
+    octEl.innerHTML = "";
+    octEl.style.width = (whiteCount * WHITE_W) + "px";
+    for (var o = 0; o < PIANO_OCTAVES; o++) {
+      var span = document.createElement("span");
+      span.textContent = "C" + (PIANO_START_OCT + o);
+      span.style.left = (o * 7 * WHITE_W + 2) + "px";
+      octEl.appendChild(span);
+    }
+  }
 
   document.addEventListener("keydown", function (e) {
     if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
