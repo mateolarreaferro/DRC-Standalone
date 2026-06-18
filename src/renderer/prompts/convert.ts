@@ -1,3 +1,5 @@
+import { csoundLimiterCsOptionsLine } from '../../shared/csd-realtime-options'
+
 export type ConvertTarget = 'webapp' | 'vst' | 'csd' | 'player'
 
 const WEBAPP_TEMPLATE = `Convert the Csound project below into a web-ready orchestra CSD. DrC's web host builds the entire UI (controls, on/off, keyboard) deterministically from the \`chn_k\` declarations you emit — your ONLY job is the Csound. Do not write any HTML or JavaScript.
@@ -5,7 +7,10 @@ const WEBAPP_TEMPLATE = `Convert the Csound project below into a web-ready orche
 OUTPUT FORMAT (strict):
 - Emit exactly ONE complete CSD: \`<CsoundSynthesizer>…</CsoundSynthesizer>\`.
 - No <Cabbage>, no HTML, no JavaScript, no code fences, no prose.
-- <CsOptions> is exactly: -odac -d
+- <CsOptions> is exactly:
+-o dac
+-d
+${csoundLimiterCsOptionsLine()}
 
 HOW THE WEB HOST USES YOUR CSD (so you emit the right thing):
 - It compiles ONLY your <CsInstruments> body (via compileOrc) and DISCARDS <CsScore>. So every function table MUST be created with \`ftgen\` at orchestra scope — NEVER as a score \`f\` statement (score f-statements will not run).
@@ -91,9 +96,13 @@ ADAPTATION RULES — follow precisely:
 
 7. **Function tables**: create them all with \`ftgen\` in the orchestra (the score is discarded). Keep wavetables and init-time setup. Drop MIDI opcodes, OSC, and hard-coded score melodies.
 
-8. **Score**: <CsScore> is ignored by the web host, so emit just a keep-alive: \`f 0 3600\`.
+8. **Score** — put this ONLY inside \`<CsScore>\`, never in \`<CsInstruments>\`. Score \`f\` / \`i\` lines in the orchestra cause a parser error (e.g. \`f 0 3600\`).
 
-9. **Quality bar**: compiles with stock Csound 6/7, renders stereo to -odac, and is audible with default control values — a held key for shape A, or immediately after Start for shape B.
+       <CsScore>
+       f 0 1
+       </CsScore>
+
+9. **Quality bar**: compiles with stock Csound 6/7, renders stereo to \`-o dac\`, and is audible with default control values — a held key for shape A, or immediately after Start for shape B.
 
 SOURCE CSD:
 <<<SOURCE>>>
@@ -139,6 +148,17 @@ CSD CHANGES:
           iVel  ampmidi 1      ; note velocity, 0..1
           ; ... the rest of the voice is unchanged; multiply the signal by iVel
 
+  - **MIDI opcode syntax — CRITICAL.** \`cpsmidi\` and \`ampmidi\` are output opcodes: the variable name comes FIRST with NO equals sign. These are WRONG and will not compile:
+
+        iFreq = cpsmidi      ; WRONG — syntax error in Csound 7
+        iAmp  = ampmidi 1    ; WRONG
+
+    Emit exactly:
+
+        iFreq cpsmidi
+        iVel  ampmidi 1
+
+  - **Envelope rates — CRITICAL.** \`linsegr\`, \`expsegr\`, \`linenr\`, and \`madsr\` accept ONLY i-rate time and value arguments — every segment time AND every breakpoint level. Read any envelope parameter that feeds these opcodes with an \`i\`-prefixed variable (or a numeric literal). Do NOT pass \`gk…\` globals or \`k…\` variables into \`expsegr\`/\`linsegr\` — Csound 7 rejects k-rate args (e.g. \`ival1 is zero\` or opcode type mismatch). When the source used k-rate envelope math, snapshot the needed values at note-on into \`i…\` locals first, then call \`expsegr\`/\`linsegr\`. Do NOT suffix literals with \`:c\` on envelope opcode lines.
   - Keep the release-aware envelope (\`linsegr\`/\`expsegr\`) so MIDI note-off releases the tail cleanly.
   - Do NOT use \`cpsmidinn(p4)\`, \`= p4\`, or \`= p5\` for a MIDI voice — those are 0 under MIDI activation.
 - Everything else in the CsInstruments and CsScore sections stays verbatim.
@@ -152,7 +172,7 @@ const CSD_TEMPLATE = `Extract the <CsoundSynthesizer>...</CsoundSynthesizer> fro
 
 OUTPUT FORMAT (strict):
 - Emit ONLY the <CsoundSynthesizer>...</CsoundSynthesizer> block. No <Cabbage>. No HTML. No code fences. No prose.
-- Keep <CsOptions> as \`-odac\` only (remove MIDI or renderer flags).
+- Keep <CsOptions> as \`-o dac\`, \`-d\`, and \`${csoundLimiterCsOptionsLine()}\` (remove MIDI or renderer flags).
 - Keep all instruments and score events unchanged.
 
 SOURCE:
@@ -182,7 +202,10 @@ The host writes knob values via score events: \`i 100 0 0 "<channelName>" <value
 OUTPUT FORMAT (strict):
 - Emit exactly ONE complete CSD: \`<CsoundSynthesizer>…</CsoundSynthesizer>\`.
 - No <Cabbage>, no HTML, no code fences, no prose.
-- <CsOptions> is exactly: -odac -d
+- <CsOptions> is exactly:
+-o dac
+-d
+${csoundLimiterCsOptionsLine()}
 
 ADAPTATION RULES — follow precisely:
 
@@ -283,7 +306,7 @@ ADAPTATION RULES — follow precisely:
 
 9. **Drop anything the Player can't drive**: MIDI opcodes, OSC listeners, \`gk<Name> init …\` knob globals (those become \`chn_k\` + \`chnget\` instead), hard-coded score melodies. Keep ftables, wavetables, and init-time setup.
 
-10. **Quality bar**: the output must compile with stock Csound 6/7, render stereo to \`-odac\`, and produce audible output when the user holds a keyboard key with default knob values. The note must sustain while held and release cleanly when released.
+10. **Quality bar**: the output must compile with stock Csound 6/7, render stereo to \`-o dac\`, and produce audible output when the user holds a keyboard key with default knob values. The note must sustain while held and release cleanly when released.
 
 SUGGESTED WELL-KNOWN CHANNEL NAMES (use these names when they fit so users get familiar bindings):
 
@@ -353,7 +376,12 @@ export function needsPlayerAdapt(source: string): boolean {
   if (!/\bchn_k\s+/i.test(source)) return true
   if (!/\bp4\b/.test(source)) return true
   if (!/\binstr\s+100\b/.test(source)) return true
-  if (!/\blinsegr\b/i.test(source)) return true
+  if (
+    !/\blinsegr\b/i.test(source) &&
+    !/\b(madsr|linenr|linen|expon|expseg|linseg)\b/i.test(source)
+  ) {
+    return true
+  }
   return false
 }
 
@@ -366,10 +394,10 @@ export function needsPlayerAdapt(source: string): boolean {
 //
 // Conservative by design: only fires on phrasings that name a target format,
 // and only returns a target that differs from the artifact already open.
-const CONVERT_INTENT: { type: ConvertTarget; re: RegExp }[] = [
+const CONVERT_INTENT: { type: 'csd' | 'webapp' | 'vst'; re: RegExp }[] = [
   {
     type: 'webapp',
-    re: /\b(web\s?app|web\s?site|web version|html (?:page|app|document|version)|in the browser|as html|browser app)\b/i,
+    re: /\b(export\s+(?:as\s+)?web\s?app|web\s?app|web\s?site|web version|html (?:page|app|document|version)|in the browser|as html|browser app)\b/i,
   },
   {
     type: 'vst',

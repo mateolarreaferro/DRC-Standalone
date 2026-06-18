@@ -17,6 +17,7 @@ import { SCHEMA_DDL, SINGLETON_ID } from './schema'
 
 let db: DatabaseType.Database | null = null
 let disabled = false
+let initError: string | null = null
 
 function dbPath(): string {
   const dir = join(app.getPath('userData'), 'drc')
@@ -41,8 +42,16 @@ export namespace MemoryDB {
     } catch (err: any) {
       disabled = true
       db = null
-      Log.error(`MemoryDB disabled (memory features off): ${err?.message ?? err}`)
+      initError = err?.message ?? String(err)
+      Log.error(`MemoryDB disabled (memory features off): ${initError}`)
     }
+  }
+
+  export function status(): { ready: boolean; path?: string; error?: string } {
+    if (db && !disabled) {
+      return { ready: true, path: dbPath() }
+    }
+    return { ready: false, error: initError ?? 'Memory database not initialized' }
   }
 
   export function isReady(): boolean {

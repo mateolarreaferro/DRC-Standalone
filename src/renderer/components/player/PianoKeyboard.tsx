@@ -1,4 +1,5 @@
-import { useCallback, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react'
+import { keyLabelForMidi, midiForKeyEvent } from '../../lib/playerKeyboardBind'
 
 interface Props {
   startOctave?: number
@@ -6,13 +7,13 @@ interface Props {
   activeNotes: Set<number>
   onNoteOn: (midi: number) => void
   onNoteOff: (midi: number) => void
+  /** When false, QWERTY key events are ignored (engine switching / stopped). */
+  keyboardEnabled?: boolean
 }
 
 const WHITE_KEYS = [0, 2, 4, 5, 7, 9, 11] // C D E F G A B
 const BLACK_KEYS = [1, 3, -1, 6, 8, 10, -1] // C# D# _ F# G# A# _
 const BLACK_OFFSETS = [0.65, 1.75, -1, 3.6, 4.7, 5.8, -1]
-
-const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 export default function PianoKeyboard({
   startOctave = 3,
@@ -20,12 +21,60 @@ export default function PianoKeyboard({
   activeNotes,
   onNoteOn,
   onNoteOff,
+  keyboardEnabled = true,
 }: Props) {
   const whiteKeyWidth = 32
   const blackKeyWidth = 20
   const whiteKeyHeight = 100
   const blackKeyHeight = 62
   const totalWhiteKeys = octaves * 7
+
+  const keysDownRef = useRef<Set<string>>(new Set())
+  const onNoteOnRef = useRef(onNoteOn)
+  const onNoteOffRef = useRef(onNoteOff)
+  onNoteOnRef.current = onNoteOn
+  onNoteOffRef.current = onNoteOff
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!keyboardEnabled) return
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+
+      const midi = midiForKeyEvent(e.key, startOctave, octaves)
+      if (midi == null) return
+      if (keysDownRef.current.has(e.key)) return
+      keysDownRef.current.add(e.key)
+      e.preventDefault()
+      onNoteOnRef.current(midi)
+    }
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      const midi = midiForKeyEvent(e.key, startOctave, octaves)
+      keysDownRef.current.delete(e.key)
+      if (midi == null) return
+      e.preventDefault()
+      onNoteOffRef.current(midi)
+    }
+
+    const onBlur = () => {
+      for (const key of [...keysDownRef.current]) {
+        const midi = midiForKeyEvent(key, startOctave, octaves)
+        if (midi != null) onNoteOffRef.current(midi)
+      }
+      keysDownRef.current.clear()
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [keyboardEnabled, startOctave, octaves])
 
   const handleDown = useCallback((midi: number) => (e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault()
@@ -38,6 +87,7 @@ export default function PianoKeyboard({
   }, [onNoteOff])
 
   const keys: JSX.Element[] = []
+  const labels: JSX.Element[] = []
 
   // White keys
   for (let oct = 0; oct < octaves; oct++) {
@@ -45,6 +95,7 @@ export default function PianoKeyboard({
       const midi = (startOctave + oct) * 12 + WHITE_KEYS[i]
       const x = (oct * 7 + i) * whiteKeyWidth
       const isActive = activeNotes.has(midi)
+      const letter = keyLabelForMidi(midi)
       keys.push(
         <rect
           key={`w-${midi}`}
@@ -64,6 +115,22 @@ export default function PianoKeyboard({
           onTouchEnd={handleUp(midi)}
         />
       )
+      if (letter) {
+        labels.push(
+          <text
+            key={`wl-${midi}`}
+            x={x + whiteKeyWidth / 2 - 1}
+            y={whiteKeyHeight - 10}
+            textAnchor="middle"
+            fill="var(--text-muted)"
+            fontSize={9}
+            fontFamily="var(--font-mono)"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {letter}
+          </text>
+        )
+      }
     }
   }
 
@@ -74,6 +141,7 @@ export default function PianoKeyboard({
       const midi = (startOctave + oct) * 12 + BLACK_KEYS[i]
       const x = oct * 7 * whiteKeyWidth + BLACK_OFFSETS[i] * whiteKeyWidth - blackKeyWidth / 2 + whiteKeyWidth
       const isActive = activeNotes.has(midi)
+      const letter = keyLabelForMidi(midi)
       keys.push(
         <rect
           key={`b-${midi}`}
@@ -91,6 +159,22 @@ export default function PianoKeyboard({
           onTouchEnd={handleUp(midi)}
         />
       )
+      if (letter) {
+        labels.push(
+          <text
+            key={`bl-${midi}`}
+            x={x + blackKeyWidth / 2}
+            y={blackKeyHeight - 8}
+            textAnchor="middle"
+            fill="#9a9893"
+            fontSize={8}
+            fontFamily="var(--font-mono)"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {letter}
+          </text>
+        )
+      }
     }
   }
 
@@ -103,6 +187,7 @@ export default function PianoKeyboard({
         style={styles.svg}
       >
         {keys}
+        {labels}
       </svg>
       <div style={styles.labels}>
         {Array.from({ length: octaves }, (_, i) => (

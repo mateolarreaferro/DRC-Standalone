@@ -4,9 +4,12 @@ import { MemoryRetrieval } from '../memory/retrieve'
 import { Learning, type FeedbackEvent } from '../memory/learning'
 import { ErrorLessons } from '../memory/error_lessons'
 import { FeedbackLessons } from '../memory/feedback_lessons'
+import { MemoryDB } from '../memory/db'
 import { Log } from '../util/log'
 
 export function handleMemoryIPC(ipcMain: IpcMain): void {
+  ipcMain.handle('memory:status', async () => MemoryDB.status())
+
   // Generic recall: top error→fix pairs relevant to a free-text query.
   ipcMain.handle('memory:recall', async (_event, query: string) => {
     return { results: MemoryRetrieval.relevantErrorFixes(query, 5) }
@@ -37,6 +40,10 @@ export function handleMemoryIPC(ipcMain: IpcMain): void {
   // Unified feedback channel used by the renderer. `accepted_fix` additionally
   // stores the error→fix pair so the agent can reuse it next time.
   ipcMain.handle('memory:feedback', async (_event, kind: string, payload: any = {}) => {
+    if (!MemoryDB.isReady()) {
+      return { id: null, error: 'memory_disabled' }
+    }
+
     if (kind === 'accepted_fix' && payload?.fixedCsd) {
       const fixKind = payload.kind === 'runtime' ? 'runtime' : 'compile'
       const errorRaw = String(payload.errorRaw ?? '')

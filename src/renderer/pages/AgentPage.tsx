@@ -1,25 +1,71 @@
-import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useSessionStore, type AgentMode, type Message } from '../stores/sessionStore'
-import { useArtifactStore, primaryContent, type Artifact } from '../stores/artifactStore'
+import { useArtifactStore, primaryContent, findBySourceMessageId, hasWebappForMessage, type Artifact } from '../stores/artifactStore'
 import ArtifactPanel from '../components/artifacts/ArtifactPanel'
+import ErrorBoundary from '../components/ErrorBoundary'
+import { useEditorStore } from '../stores/editorStore'
 import ArtifactCard from '../components/chat/ArtifactCard'
 import MessageFeedback from '../components/chat/MessageFeedback'
 import ProfileBadge from '../components/chat/ProfileBadge'
 import SessionHistory from '../components/chat/SessionHistory'
 import { audioFeedback } from '../styles/audio-feedback'
 import { useAppStore } from '../stores/appStore'
-import { detect, stripArtifact, deriveTitle } from '../lib/artifactDetect'
+import { detect, detectCsd, stripArtifact, deriveTitle, type DetectionResult } from '../lib/artifactDetect'
+import { prepareCsdForCabbage } from '../../shared/csd-cabbage-prepare'
 import { buildConvertPrompt, detectConvertIntent, type ConvertTarget } from '../prompts/convert'
-import { playArtifact, stopPlayback, resetAutofix } from '../lib/playback'
+import { playArtifact, stopPlayback, resetAutofix, isAutofixUserMessage } from '../lib/playback'
 import { usePlaybackStore } from '../stores/playbackStore'
 import { wrapWithArtifactContext } from '../lib/artifactContext'
-import { parseChannels, extractOrchestra, usesKeyboard } from '../lib/parseChannels'
 import { buildWebApp } from '../lib/webHarness'
+import { buildWebappManifest, prepareWebappCompileCsd } from '../lib/webappPrepare'
+import StudyFlowButton from '../components/study/StudyFlowButton'
+import type { SignalFlowStudyInput } from '../lib/signalFlowStudy'
+import { compileCheckWebappCsd } from '../lib/playback'
+import UsageBar from '../components/chat/UsageBar'
+import AgentActivityBar from '../components/chat/AgentActivityBar'
+
+function artifactCodeFromDetection(detected: DetectionResult): string {
+  return detected.type === 'vst' ? prepareCsdForCabbage(detected.code) : detected.code
+}
+import PromptRetryBar from '../components/chat/PromptRetryBar'
+import QuotaCooldown from '../components/QuotaCooldown'
+import ApiKeyPromptDialog from '../components/ApiKeyPromptDialog'
+import { useUsageStore } from '../stores/usageStore'
+import { isRateLimited, useRateLimitStore } from '../stores/rateLimitStore'
+import { formatCostUSD, formatTokenCount } from '../lib/usageFormat'
 
 // Strip a stray leading web-app wrapper so a fresh turn's CSD can be recovered.
 const DOCTYPE_RE = /<!DOCTYPE\s+html\s*>/gi
 const HTML_FENCE_RE = /```(?:html|HTML)\s*\n/g
+
+function userMessageBeforeAssistant(messages: Message[], assistantId: string): Message | null {
+  const idx = messages.findIndex((m) => m.id === assistantId)
+  if (idx <= 0) return null
+  for (let i = idx - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return messages[i]
+    if (messages[i].role === 'assistant' && messages[i].type !== 'narration') break
+  }
+  return null
+}
+
+/** True when `assistantId` is a non-narration assistant turn strictly after `userMsgId`. */
+function assistantTurnAfterUser(messages: Message[], userMsgId: string, assistantId: string): boolean {
+  const userIdx = messages.findIndex((m) => m.id === userMsgId)
+  const asstIdx = messages.findIndex((m) => m.id === assistantId)
+  return userIdx >= 0 && asstIdx > userIdx
+}
+
+function syncWebappFrozenFromStore(frozen: Set<string>): void {
+  for (const a of useArtifactStore.getState().artifacts) {
+    if (a.type === 'webapp' && a.sourceMessageId) frozen.add(a.sourceMessageId)
+  }
+}
+
+function isMessageWebappLocked(messageId: string, frozen: Set<string>): boolean {
+  if (frozen.has(messageId)) return true
+  return hasWebappForMessage(useArtifactStore.getState().artifacts, messageId)
+}
 
 const MODE_INFO: Record<AgentMode, { label: string; color: string }> = {
   csound: { label: 'Complex', color: '#7cb8a4' },
@@ -50,19 +96,36 @@ export default function AgentPage() {
   const [providersAvailable, setProvidersAvailable] = useState<string[] | null>(null)
   const playingArtifactId = usePlaybackStore((s) => s.artifactId)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const { messages, agentMode, setAgentMode, isStreaming, addMessage, setStreaming, setSessionID, sessionID, startNewSession, clearMessages } = useSessionStore()
+  /** Last successful send — powers one-click retry without retyping. */
+  const lastSendRef = useRef<{ displayText: string; payload: string } | null>(null)
+  const { messages, agentMode, setAgentMode, isStreaming, agentActivity, addMessage, setStreaming, setSessionID, sessionID, startNewSession, clearMessages, removeFailedAssistantTurn } = useSessionStore()
+  const rateLimitUntil = useRateLimitStore((s) => s.until)
+  const rateLimitProvider = useRateLimitStore((s) => s.providerLabel)
+  const clearRateLimit = useRateLimitStore((s) => s.clearCooldown)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const { artifacts, panelOpen, addArtifact, updatePrimary, updateInPlace, setActive } = useArtifactStore()
+  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false)
+  const { artifacts, panelOpen, addArtifact, updatePrimary, updateInPlace, setActive, activeArtifactId } = useArtifactStore()
   const audioEnabled = useAppStore((s) => s.audioFeedbackEnabled)
 
   useEffect(() => {
-    window.api?.config?.getApiKeys().then((r: any) => {
-      setProvidersAvailable(r?.available ?? [])
-    }).catch(() => setProvidersAvailable([]))
-  }, [messages.length])
+    const refresh = () => {
+      window.api?.config?.getApiKeys().then((r: any) => {
+        setProvidersAvailable(r?.available ?? [])
+      }).catch(() => setProvidersAvailable([]))
+    }
+    refresh()
+    window.addEventListener('drc:providers-changed', refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.removeEventListener('drc:providers-changed', refresh)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
 
   // Map message IDs to artifact IDs for rendering
   const [msgArtifactMap, setMsgArtifactMap] = useState<Map<string, string>>(new Map())
+  const msgArtifactMapRef = useRef(msgArtifactMap)
+  msgArtifactMapRef.current = msgArtifactMap
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -83,10 +146,30 @@ export default function AgentPage() {
   // `editBaseId` is set when this turn is a FOLLOW-UP edit of an existing web app
   // (vs a first-time conversion): the rebuilt web app becomes a new VERSION of that
   // artifact rather than a brand-new one.
-  const pendingWebappConvertRef = useRef<{ title: string; editBaseId?: string } | null>(null)
+  const pendingWebappConvertRef = useRef<{ title: string; editBaseId?: string; afterUserMsgId: string } | null>(null)
+  // Message ids that already produced a web app — never re-detect orchestra CSD from them.
+  const webappFrozenMessageIds = useRef<Set<string>>(new Set())
   // True only on a turn that explicitly requested a format conversion. A fresh
   // generation leaves it false, so a stray DOCTYPE is never made a webapp/vst.
   const convertTurnRef = useRef<boolean>(false)
+  // While buildWebApp + compile-check run async, block normal detect() from
+  // re-deriving a spurious CSD from the same orchestra message.
+  const webappBuildInFlightRef = useRef<string | null>(null)
+
+  // Re-seed frozen message ids on mount and whenever the artifact store gains a webapp.
+  useEffect(() => {
+    syncWebappFrozenFromStore(webappFrozenMessageIds.current)
+    return useArtifactStore.subscribe(() => {
+      syncWebappFrozenFromStore(webappFrozenMessageIds.current)
+    })
+  }, [])
+
+  // Detection keys on message text only — usage metadata must not re-trigger detect().
+  const messagesContentKey = useMemo(
+    () => messages.map((m) => `${m.id}\t${m.role}\t${m.type ?? ''}\t${m.content}`).join('\n'),
+    [messages],
+  )
+
   useEffect(() => {
     // Look for the most recent non-narration assistant message. Narration messages
     // are ambient context and never contain artifacts.
@@ -97,47 +180,132 @@ export default function AgentPage() {
     }
     if (!last) return
 
-    const detected = detect(last.content)
-    if (!detected) return
-
-    // Convert-to-Web-App: the model emits an adapted orchestra CSD, not HTML. We
-    // own the UI, so suppress the CSD artifact while it streams; on completion
-    // wrap the orchestra into a web app deterministically. Consumed in this one
-    // turn — the flag is cleared here so it never affects a later generation.
-    const pendingConvert = pendingWebappConvertRef.current
-    if (pendingConvert && detected.type === 'csd') {
-      if (isStreaming) return            // wait for the full orchestra
-      pendingWebappConvertRef.current = null
-      const csd = detected.code
-      const orc = extractOrchestra(csd)
-      const title = pendingConvert.title || deriveTitle(csd, 'csd', lastUserPrompt)
-      const html = buildWebApp({
-        orc,
-        channels: parseChannels(csd),
-        title,
-        hasKeyboard: usesKeyboard(orc),
-        hasReverbBus: /\binstr\s+99\b/.test(orc),
-      })
-      // A follow-up edit rebuilds as a NEW VERSION of the existing web app; a
-      // first-time conversion creates a fresh artifact.
-      const artifact = pendingConvert.editBaseId
-        ? updatePrimary(pendingConvert.editBaseId, html, last.id)
-        : addArtifact({ type: 'webapp', title, content: html, sourceMessageId: last.id })
-      setMsgArtifactMap((prev) => new Map(prev).set(last.id, artifact.id))
-      setActive(artifact.id)
+    const streaming = useSessionStore.getState().isStreaming
+    const storeNow = useArtifactStore.getState()
+    const canonicalForMsg = findBySourceMessageId(storeNow.artifacts, last.id)
+    if (isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) {
+      const mappedId = msgArtifactMapRef.current.get(last.id)
+      if (canonicalForMsg && mappedId !== canonicalForMsg.id) {
+        setMsgArtifactMap((prev) => new Map(prev).set(last.id, canonicalForMsg.id))
+      }
+      if (canonicalForMsg && storeNow.activeArtifactId !== canonicalForMsg.id) {
+        setActive(canonicalForMsg.id)
+      }
       return
     }
 
-    let existingId = msgArtifactMap.get(last.id)
+    // Convert-to-Web-App: model must emit orchestra CSD; host wraps via buildWebApp.
+    // Use detectCsd (not detect) so stray HTML never hijacks the conversion turn.
+    const pendingConvert = pendingWebappConvertRef.current
+    if (pendingConvert) {
+      // Do not consume on a PRIOR assistant message (e.g. original CSD) before the
+      // conversion stream's first chunk — that wrapped the wrong orchestra and left
+      // pendingConvert null when the real conversion response arrived as plain CSD.
+      if (!assistantTurnAfterUser(messages, pendingConvert.afterUserMsgId, last.id)) return
+
+      const csdDet = detectCsd(last.content)
+      if (!csdDet) return
+      if (streaming && !csdDet.complete) return
+
+      const csd = csdDet.code
+      const title = pendingConvert.title || deriveTitle(csd, 'csd', lastUserPrompt)
+      const editBaseId = pendingConvert.editBaseId
+      const messageId = last.id
+      editBaseRef.current = null
+      pendingWebappConvertRef.current = null
+      convertTurnRef.current = false
+      webappBuildInFlightRef.current = messageId
+      // Optimistic freeze — block detect()/updateInPlace for the full async wrap.
+      webappFrozenMessageIds.current.add(messageId)
+
+      void (async () => {
+        try {
+          const compileCheck = await compileCheckWebappCsd(prepareWebappCompileCsd(csd))
+          if (!compileCheck.ok) {
+            webappFrozenMessageIds.current.delete(messageId)
+            addMessage({
+              id: `webapp-compile-${Date.now()}`,
+              role: 'assistant',
+              type: 'narration',
+              content:
+                `Web app conversion could not compile. ${compileCheck.error ?? 'Check the Csound console for details.'} ` +
+                'Common fix: score lines like f 0 3600 must live in <CsScore>, not <CsInstruments>. Try Convert to Web App again.',
+              timestamp: Date.now(),
+            })
+            return
+          }
+          const manifest = buildWebappManifest(csd)
+          const html = buildWebApp({
+            orc: manifest.orc,
+            channels: manifest.channels,
+            title,
+            hasKeyboard: manifest.hasKeyboard,
+            hasReverbBus: manifest.hasReverbBus,
+          })
+          const artifact = editBaseId
+            ? updatePrimary(editBaseId, html, messageId)
+            : addArtifact({ type: 'webapp', title, content: html, sourceMessageId: messageId })
+          webappFrozenMessageIds.current.add(messageId)
+          // Drop any spurious CSD created by detect() while the wrap was in flight.
+          const store = useArtifactStore.getState()
+          const spurious = store.artifacts
+            .filter((a) => a.sourceMessageId === messageId && a.type === 'csd' && a.id !== artifact.id)
+            .map((a) => a.id)
+          if (spurious.length) store.removeArtifacts(spurious)
+          setMsgArtifactMap((prev) => new Map(prev).set(messageId, artifact.id))
+          setActive(artifact.id)
+        } finally {
+          if (webappBuildInFlightRef.current === messageId) {
+            webappBuildInFlightRef.current = null
+          }
+        }
+      })()
+      return
+    }
+
+    if (webappBuildInFlightRef.current === last.id) return
+
+    const detected = detect(last.content)
+    if (!detected) return
+    if (detected.type === 'csd' && isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) {
+      return
+    }
+
+    let existingId = msgArtifactMapRef.current.get(last.id)
+    const userBefore = userMessageBeforeAssistant(messages, last.id)
+    const isAutofixTurn = !!(userBefore && isAutofixUserMessage(userBefore.content))
+    const autofixTargetId = isAutofixTurn
+      ? (useSessionStore.getState().pendingAutofixArtifactId
+        ?? useSessionStore.getState().lastFailure?.artifactId
+        ?? null)
+      : null
+
+    // Auto-fix: update the broken artifact in place — never spawn a second one.
+    if (autofixTargetId && (!existingId || existingId !== autofixTargetId)) {
+      const autofixTarget = useArtifactStore.getState().artifacts.find((a) => a.id === autofixTargetId)
+      if (autofixTarget?.type === 'webapp') return
+      if (isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) return
+      updateInPlace(autofixTargetId, artifactCodeFromDetection(detected))
+      setMsgArtifactMap((prev) => new Map(prev).set(last.id, autofixTargetId))
+      if (detected.complete && !useArtifactStore.getState().panelOpen) {
+        useArtifactStore.getState().openPanel()
+      }
+      return
+    }
+
     if (!existingId) {
       // Re-adopt an artifact already built for this message in a previous mount.
       // The store survives navigation but our local map doesn't, so without this
       // a remount would re-derive a brand-new artifact from the message text —
       // and for converted web apps that text is an orchestra CSD, not the HTML,
       // so it would clobber the web app with a spurious CSD version.
-      const adopted = useArtifactStore.getState().artifacts.find((a) => a.sourceMessageId === last.id)
+      const adopted = findBySourceMessageId(useArtifactStore.getState().artifacts, last.id)
       if (adopted) {
         setMsgArtifactMap((prev) => new Map(prev).set(last.id, adopted.id))
+        if (adopted.type === 'webapp') {
+          webappFrozenMessageIds.current.add(last.id)
+          setActive(adopted.id)
+        }
         return
       }
       // Fresh-turn guard: a non-conversion generation must be a CSD. A stray
@@ -145,12 +313,12 @@ export default function AgentPage() {
       // wrongly emits a web app on a first turn would render as a webapp. Refuse
       // it; recover an embedded CSD if the message has one, else ignore the turn.
       if (!convertTurnRef.current && detected.type !== 'csd') {
-        if (!isStreaming) {
+        if (!streaming) {
           const stripped = last.content.replace(DOCTYPE_RE, '').replace(HTML_FENCE_RE, '')
           const csdFallback = detect(stripped)
-          if (csdFallback && csdFallback.type === 'csd') {
+          if (csdFallback && csdFallback.type === 'csd' && !isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) {
             const t = deriveTitle(csdFallback.code, 'csd', lastUserPrompt)
-            const a = addArtifact({ type: 'csd', title: t, content: csdFallback.code, sourceMessageId: last.id })
+            const a = addArtifact({ type: 'csd', title: t, content: csdFallback.code, sourceMessageId: last.id }, { openPanel: true })
             setMsgArtifactMap((prev) => new Map(prev).set(last.id, a.id))
           }
         }
@@ -162,13 +330,25 @@ export default function AgentPage() {
         ? useArtifactStore.getState().artifacts.find((a) => a.id === editBaseRef.current)
         : null
       if (base && base.type === detected.type) {
-        const artifact = updatePrimary(base.id, detected.code, last.id)
+        if (canonicalForMsg?.type === 'webapp' || isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) {
+          if (canonicalForMsg) {
+            setMsgArtifactMap((prev) => new Map(prev).set(last.id, canonicalForMsg.id))
+            setActive(canonicalForMsg.id)
+          }
+          editBaseRef.current = null
+          return
+        }
+        const artifact = updatePrimary(base.id, artifactCodeFromDetection(detected), last.id)
         setMsgArtifactMap((prev) => new Map(prev).set(last.id, artifact.id))
         editBaseRef.current = null
         return
       }
+      if (detected.type === 'csd' && isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) return
       const title = deriveTitle(detected.code, detected.type, lastUserPrompt)
-      const artifact = addArtifact({ type: detected.type, title, content: detected.code, sourceMessageId: last.id })
+      const artifact = addArtifact(
+        { type: detected.type, title, content: artifactCodeFromDetection(detected), sourceMessageId: last.id },
+        { openPanel: detected.complete },
+      )
       setMsgArtifactMap((prev) => new Map(prev).set(last.id, artifact.id))
       return
     }
@@ -176,22 +356,72 @@ export default function AgentPage() {
     // Never overwrite an artifact whose type no longer matches the message text
     // (e.g. a converted web app derived from an orchestra-CSD message). The
     // message isn't the source of truth for those, so re-deriving would corrupt it.
-    const existing = useArtifactStore.getState().artifacts.find((a) => a.id === existingId)
-    if (existing && existing.type !== detected.type) return
-
-    updateInPlace(existingId, detected.code)
-
-    if (!isStreaming && detected.complete && detected.type === 'csd' && !autoPlayedRef.current.has(last.id)) {
-      autoPlayedRef.current.add(last.id)
-      const artifact = useArtifactStore.getState().artifacts.find((a) => a.id === existingId)
-      if (artifact) void playArtifact(artifact)
+    const storeArtifacts = useArtifactStore.getState().artifacts
+    const existing = storeArtifacts.find((a) => a.id === existingId)
+    const canonical = findBySourceMessageId(storeArtifacts, last.id)
+    if (canonical && existing && canonical.id !== existing.id) {
+      setMsgArtifactMap((prev) => new Map(prev).set(last.id, canonical.id))
+      return
     }
-  }, [messages, isStreaming])
+    if (existing && existing.type !== detected.type) return
+    if (detected.type === 'csd' && isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) return
+    if (existing?.type === 'webapp' && detected.type === 'csd') return
+
+    updateInPlace(existingId, artifactCodeFromDetection(detected))
+
+    if (detected.complete && !useArtifactStore.getState().panelOpen) {
+      useArtifactStore.getState().openPanel()
+    }
+  }, [messagesContentKey, lastUserPrompt])
+
+  // Autoplay is separate from detection — playback state must not re-run detect().
+  useEffect(() => {
+    if (isStreaming) return
+    let last: Message | null = null
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'assistant' && m.type !== 'narration') { last = m; break }
+    }
+    if (!last) return
+    if (isMessageWebappLocked(last.id, webappFrozenMessageIds.current)) return
+
+    const detected = detect(last.content)
+    if (!detected?.complete || detected.type !== 'csd') return
+
+    const userBefore = userMessageBeforeAssistant(messages, last.id)
+    const isAutofixTurn = !!(userBefore && isAutofixUserMessage(userBefore.content))
+    if (isAutofixTurn) {
+      const autofixTargetId =
+        useSessionStore.getState().pendingAutofixArtifactId
+        ?? useSessionStore.getState().lastFailure?.artifactId
+        ?? msgArtifactMapRef.current.get(last.id)
+        ?? null
+      if (!autofixTargetId || autoPlayedRef.current.has(last.id)) return
+      const artifact = useArtifactStore.getState().artifacts.find((a) => a.id === autofixTargetId)
+      if (!artifact || artifact.type !== 'csd') return
+      autoPlayedRef.current.add(last.id)
+      void playArtifact(artifact, { allowAutofix: false })
+      return
+    }
+
+    const existingId = msgArtifactMapRef.current.get(last.id)
+    if (!existingId || autoPlayedRef.current.has(last.id)) return
+    const canonicalForMsg = findBySourceMessageId(useArtifactStore.getState().artifacts, last.id)
+    if (canonicalForMsg?.type === 'webapp') return
+    const artifact = useArtifactStore.getState().artifacts.find((a) => a.id === existingId)
+    if (!artifact || artifact.type !== 'csd') return
+    autoPlayedRef.current.add(last.id)
+    void playArtifact(artifact)
+  }, [messagesContentKey, isStreaming])
 
   // Send a conversion prompt to the LLM
   const requestConversion = useCallback(async (targetType: ConvertTarget) => {
     const active = useArtifactStore.getState().getActive()
     if (!active) return
+    if (providersAvailable !== null && providersAvailable.length === 0) {
+      setShowApiKeyDialog(true)
+      return
+    }
 
     const prompt = buildConvertPrompt(targetType, primaryContent(active))
     const shortLabel =
@@ -201,31 +431,35 @@ export default function AgentPage() {
 
     // The webapp conversion now returns an orchestra CSD that we wrap ourselves
     // (see the detection effect). Mark the turn so it's intercepted.
-    pendingWebappConvertRef.current = targetType === 'webapp' ? { title: active.title } : null
+    editBaseRef.current = null
+    const userMsgId = `msg_${Date.now()}`
+    pendingWebappConvertRef.current =
+      targetType === 'webapp'
+        ? { title: active.title, editBaseId: active.type === 'webapp' ? active.id : undefined, afterUserMsgId: userMsgId }
+        : null
     // Explicit conversion — the fresh-turn guard must NOT suppress the artifact.
     convertTurnRef.current = true
 
     setInput('')
     // Show a compact user-visible message, not the full template
-    addMessage({ id: `msg_${Date.now()}`, role: 'user', content: shortLabel, timestamp: Date.now() })
+    addMessage({ id: userMsgId, role: 'user', content: shortLabel, timestamp: Date.now() })
     setLastUserPrompt(shortLabel)
     setStreaming(true)
 
     try {
       if (window.api?.session) {
-        let sid = sessionID
-        if (!sid) {
-          const session = await window.api.session.create(agentMode)
-          sid = session.id
-          setSessionID(sid)
-        }
-        await window.api.session.send(sid, prompt)
+        const activeSid = sessionID ?? (await window.api.session.create(agentMode)).id
+        if (!sessionID) setSessionID(activeSid)
+        lastSendRef.current = { displayText: shortLabel, payload: prompt }
+        await window.api.session.send(activeSid, prompt)
       }
     } catch (err: any) {
+      pendingWebappConvertRef.current = null
+      convertTurnRef.current = false
       addMessage({ id: `msg_${Date.now()}`, role: 'assistant', content: `Error: ${err.message}`, timestamp: Date.now() })
       setStreaming(false)
     }
-  }, [sessionID, agentMode])
+  }, [sessionID, agentMode, providersAvailable])
 
   const newChat = useCallback(() => {
     void stopPlayback()
@@ -240,6 +474,9 @@ export default function AgentPage() {
     autoPlayedRef.current = new Set()
     pendingWebappConvertRef.current = null
     convertTurnRef.current = false
+    webappBuildInFlightRef.current = null
+    webappFrozenMessageIds.current = new Set()
+    lastSendRef.current = null
   }, [sessionID, startNewSession])
 
   // Reopen a persisted chat. We pre-seed autoPlayedRef with the loaded message
@@ -255,10 +492,13 @@ export default function AgentPage() {
     // leak across sessions. The artifact-detection effect rebuilds this session's
     // final artifact from its loaded messages.
     useArtifactStore.getState().reset()
+    useUsageStore.getState().resetArea('agent')
     editBaseRef.current = null
     setMsgArtifactMap(new Map())
     pendingWebappConvertRef.current = null
     convertTurnRef.current = false
+    webappBuildInFlightRef.current = null
+    webappFrozenMessageIds.current = new Set()
     setSessionID(data.id)
     if (['csound', 'csound-sine'].includes(data.agent)) setAgentMode(data.agent)
     const loaded = new Set<string>()
@@ -270,6 +510,11 @@ export default function AgentPage() {
     autoPlayedRef.current = loaded // suppress autoplay for restored turns
   }, [sessionID, clearMessages, setSessionID, setAgentMode, addMessage])
 
+  const handleOpenInBrowser = useCallback(async (artifact: Artifact) => {
+    if (artifact.type !== 'webapp') return
+    await window.api?.export?.openInBrowser?.(primaryContent(artifact), artifact.title)
+  }, [])
+
   const handlePlay = useCallback((artifact: Artifact) => {
     void playArtifact(artifact)
   }, [])
@@ -278,76 +523,115 @@ export default function AgentPage() {
     void stopPlayback()
   }, [])
 
-  const handleSend = async (overrideText?: string) => {
-    const text = (overrideText ?? input).trim()
-    if (!text || isStreaming) return
-    if (audioEnabled) audioFeedback.click()
+  const handleCancel = useCallback(async () => {
+    const sid = useSessionStore.getState().sessionID
+    useSessionStore.getState().setAgentActivity('Cancelling…')
+    if (sid && window.api?.session?.cancel) {
+      await window.api.session.cancel(sid)
+    }
+  }, [])
 
-    setLastUserPrompt(text)
-    resetAutofix(sessionID)  // Fresh user prompt — clear any accumulated autofix attempts.
-    convertTurnRef.current = false  // default: a fresh turn is a CSD; convert branches re-set this below.
-    addMessage({ id: `msg_${Date.now()}`, role: 'user', content: text, timestamp: Date.now() })
-    setInput('')
+  const buildPayloadFromText = useCallback((text: string): string => {
+    const active = useArtifactStore.getState().getActive()
+    const convertTo = active ? detectConvertIntent(text, active.type) : null
+    const conversionBusy = Boolean(pendingWebappConvertRef.current || webappBuildInFlightRef.current)
+
+    if (active && active.type === 'webapp' && !convertTo) {
+      if (!conversionBusy) {
+        const msgs = useSessionStore.getState().messages
+        const srcMsg = active.sourceMessageId
+          ? msgs.find((m) => m.id === active.sourceMessageId)
+          : null
+        const srcDet = srcMsg ? detect(srcMsg.content) : null
+        const srcCsd = srcDet && srcDet.type === 'csd' ? srcDet.code : null
+        if (srcCsd) {
+          editBaseRef.current = null
+          // afterUserMsgId patched in handleSend before addMessage
+          pendingWebappConvertRef.current = { title: active.title, editBaseId: active.id, afterUserMsgId: '' }
+          convertTurnRef.current = true
+          return `${buildConvertPrompt('webapp', srcCsd)}\n\n<user-note>${text}</user-note>`
+        }
+        editBaseRef.current = active.id
+        pendingWebappConvertRef.current = null
+      }
+      return wrapWithArtifactContext(text)
+    }
+
+    if (!conversionBusy) {
+      editBaseRef.current = active && !convertTo ? active.id : null
+      pendingWebappConvertRef.current =
+        convertTo === 'webapp' && active
+          ? { title: active.title, editBaseId: active.type === 'webapp' ? active.id : undefined, afterUserMsgId: '' }
+          : null
+      convertTurnRef.current = Boolean(convertTo && active)
+    }
+
+    if (conversionBusy) {
+      return wrapWithArtifactContext(text)
+    }
+
+    return convertTo && active
+      ? `${buildConvertPrompt(convertTo, primaryContent(active))}\n\n<user-note>${text}</user-note>`
+      : wrapWithArtifactContext(text)
+  }, [])
+
+  const handleSend = async (
+    overrideText?: string,
+    opts?: { retry?: boolean; variant?: boolean; refillOnly?: boolean },
+  ) => {
+    const retry = Boolean(opts?.retry || opts?.variant)
+
+    if (opts?.refillOnly) {
+      setInput(overrideText ?? lastUserPrompt)
+      return
+    }
+
+    const text = (overrideText ?? input).trim()
+    if (!retry && !text) return
+    if (isStreaming) return
+    if (isRateLimited()) return
+    if (providersAvailable !== null && providersAvailable.length === 0) {
+      setShowApiKeyDialog(true)
+      return
+    }
+
+    let displayText: string
+    let payload: string
+
+    if (retry) {
+      if (!lastSendRef.current) return
+      displayText = lastSendRef.current.displayText
+      payload = lastSendRef.current.payload
+      removeFailedAssistantTurn()
+    } else {
+      displayText = text
+      resetAutofix(sessionID)
+      if (!pendingWebappConvertRef.current && !webappBuildInFlightRef.current) {
+        convertTurnRef.current = false
+      }
+      payload = buildPayloadFromText(text)
+      const userMsgId = `msg_${Date.now()}`
+      if (pendingWebappConvertRef.current?.afterUserMsgId === '') {
+        pendingWebappConvertRef.current = { ...pendingWebappConvertRef.current, afterUserMsgId: userMsgId }
+      }
+      lastSendRef.current = { displayText, payload }
+      addMessage({ id: userMsgId, role: 'user', content: text, timestamp: Date.now() })
+      setInput('')
+    }
+
+    if (audioEnabled) audioFeedback.click()
+    useSessionStore.getState().setAgentActivity(retry ? 'Retrying…' : 'Sending to the Agent…')
+    setLastUserPrompt(displayText)
     setStreaming(true)
 
     try {
       if (window.api?.session) {
-        let sid = sessionID
-        if (!sid) {
-          const session = await window.api.session.create(agentMode)
-          sid = session.id
-          setSessionID(sid)
-        }
-        // If the message is really a request to switch the open artifact to a
-        // different format ("make it a web app"), route it through the same
-        // proven convert template the "Convert to" button uses — otherwise the
-        // preserve-format hint below would fight the switch and keep emitting
-        // the current type. Plain follow-ups keep the format-preserving hint.
-        const active = useArtifactStore.getState().getActive()
-        const convertTo = active ? detectConvertIntent(text, active.type) : null
-
-        let payload: string
-        if (active && active.type === 'webapp' && !convertTo) {
-          // CRITICAL: a follow-up on a web app must edit the underlying web-ready
-          // CSD and rebuild deterministically via buildWebApp — NEVER hand the
-          // generated HTML to the model. The model rewriting HTML drops the Csound
-          // engine (Csound()/compileOrc/start/inputMessage) and the app becomes
-          // unplayable. Recover the source CSD from the message this web app was
-          // built from, re-run the webapp template with the user's note, and let
-          // the detection effect re-wrap it as a new version.
-          const msgs = useSessionStore.getState().messages
-          const srcMsg = active.sourceMessageId
-            ? msgs.find((m) => m.id === active.sourceMessageId)
-            : null
-          // Only usable if the source message is actually a CSD (a web app built
-          // by the deterministic path). Legacy web apps whose source is HTML fall
-          // back so we don't feed HTML into the orchestra template.
-          const srcDet = srcMsg ? detect(srcMsg.content) : null
-          const srcCsd = srcDet && srcDet.type === 'csd' ? srcDet.code : null
-          if (srcCsd) {
-            editBaseRef.current = null
-            pendingWebappConvertRef.current = { title: active.title, editBaseId: active.id }
-            convertTurnRef.current = true
-            payload = `${buildConvertPrompt('webapp', srcCsd)}\n\n<user-note>${text}</user-note>`
-          } else {
-            // Source CSD unrecoverable (rare) — fall back to in-place edit.
-            editBaseRef.current = active.id
-            pendingWebappConvertRef.current = null
-            payload = wrapWithArtifactContext(text)
-          }
-        } else {
-          // A plain follow-up edits the loaded version in place (branch from it).
-          // A format conversion changes type, so it starts a fresh artifact chain.
-          editBaseRef.current = active && !convertTo ? active.id : null
-          // A "make it a web app" intent returns an orchestra CSD we wrap ourselves.
-          pendingWebappConvertRef.current =
-            convertTo === 'webapp' && active ? { title: active.title } : null
-          convertTurnRef.current = Boolean(convertTo && active)
-          payload = convertTo && active
-            ? `${buildConvertPrompt(convertTo, primaryContent(active))}\n\n<user-note>${text}</user-note>`
-            : wrapWithArtifactContext(text)
-        }
-        await window.api.session.send(sid, payload)
+        const activeSid = sessionID ?? (await window.api.session.create(agentMode)).id
+        if (!sessionID) setSessionID(activeSid)
+        await window.api.session.send(activeSid, payload, {
+          retry: opts?.retry,
+          variant: opts?.variant,
+        })
       } else {
         addMessage({ id: `msg_${Date.now()}`, role: 'assistant', content: 'Not connected — restart app.', timestamp: Date.now() })
         setStreaming(false)
@@ -358,12 +642,102 @@ export default function AgentPage() {
     }
   }
 
+  const showRetryBar = useMemo(() => {
+    if (isStreaming || !lastUserPrompt) return false
+    const last = messages[messages.length - 1]
+    if (!last) return false
+    if (last.type === 'error') return true
+    if (last.role === 'assistant' && last.type !== 'narration' && !detect(last.content)) return true
+    return false
+  }, [messages, isStreaming, lastUserPrompt])
+
+  const lastUserMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].id
+    }
+    return null
+  }, [messages])
+
+  const agentInstrument = useMemo(() => {
+    if (activeArtifactId) {
+      const hit = artifacts.find((a) => a.id === activeArtifactId)
+      if (hit) return hit
+    }
+    for (let i = artifacts.length - 1; i >= 0; i--) {
+      const a = artifacts[i]
+      if (a.type === 'csd' || a.type === 'webapp' || a.type === 'vst') return a
+    }
+    return null
+  }, [artifacts, activeArtifactId])
+
+  const agentStudyInput = useMemo<SignalFlowStudyInput | null>(() => {
+    if (!agentInstrument) return null
+    return { title: agentInstrument.title, source: primaryContent(agentInstrument) }
+  }, [agentInstrument])
+
   const renderMessage = (msg: Message) => {
     if (msg.role === 'user') {
+      const isLastUser = msg.id === lastUserMsgId
+      const retryDisabled = isStreaming
       return (
         <div key={msg.id} style={styles.userRow}>
-          <div style={styles.userBubble}>
-            <p style={styles.msgText}>{msg.content}</p>
+          <div style={styles.userBubbleCol}>
+            <button
+              type="button"
+              style={{
+                ...styles.userPromptBtn,
+                ...(retryDisabled ? styles.userPromptBtnDisabled : {}),
+              }}
+              disabled={retryDisabled}
+              onClick={() => {
+                if (isLastUser && lastSendRef.current) {
+                  handleSend(undefined, { retry: true })
+                } else {
+                  handleSend(msg.content, { refillOnly: true })
+                }
+              }}
+              title={isLastUser ? 'Try again with this prompt' : 'Put this prompt in the text field'}
+            >
+              {msg.content}
+            </button>
+            {isLastUser && !retryDisabled && (
+              <div style={styles.userPromptActions}>
+                <button type="button" style={styles.userPromptAction} onClick={() => handleSend(undefined, { retry: true })}>
+                  Try again
+                </button>
+                <button type="button" style={styles.userPromptAction} onClick={() => handleSend(msg.content, { refillOnly: true })}>
+                  Edit
+                </button>
+                <button type="button" style={styles.userPromptAction} onClick={() => handleSend(undefined, { variant: true })}>
+                  Variation
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )
+    }
+
+    if (msg.type === 'error') {
+      const retryDisabled = isStreaming
+      return (
+        <div key={msg.id} style={styles.assistantRow}>
+          <div style={styles.errorBubble}>
+            <span style={styles.errorLabel}>Could not generate</span>
+            <p style={styles.errorText}>{msg.content}</p>
+            {lastUserPrompt && (
+              <div style={styles.errorActions}>
+                <button type="button" style={styles.errorActionPrimary} disabled={retryDisabled} onClick={() => handleSend(undefined, { retry: true })}>
+                  Try again
+                </button>
+                <button type="button" style={styles.errorAction} disabled={retryDisabled} onClick={() => handleSend(lastUserPrompt, { refillOnly: true })}>
+                  Edit prompt
+                </button>
+                <button type="button" style={styles.errorAction} disabled={retryDisabled} onClick={() => handleSend(undefined, { variant: true })}>
+                  Try variation
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )
@@ -403,7 +777,12 @@ export default function AgentPage() {
     }
 
     const text = stripArtifact(msg.content)
-    const artifactId = msgArtifactMap.get(msg.id)
+    const canonical = findBySourceMessageId(artifacts, msg.id)
+    const mappedId = msgArtifactMap.get(msg.id)
+    const artifactId =
+      canonical?.type === 'webapp'
+        ? canonical.id
+        : (mappedId && artifacts.some((a) => a.id === mappedId) ? mappedId : canonical?.id ?? mappedId)
     const artifact = artifactId ? artifacts.find((a) => a.id === artifactId) : null
     // Don't offer feedback on the turn that's still streaming in.
     const streamingThis = isStreaming && messages[messages.length - 1]?.id === msg.id
@@ -420,11 +799,107 @@ export default function AgentPage() {
               onClick={() => setActive(artifact.id)}
               onPlay={() => handlePlay(artifact)}
               onStop={handleStop}
+              onOpenInBrowser={
+                artifact.type === 'webapp'
+                  ? () => void handleOpenInBrowser(artifact)
+                  : undefined
+              }
             />
           )}
           {showFeedback && <MessageFeedback messageId={msg.id} content={msg.content} />}
+          {msg.usage && (
+            <span style={styles.msgUsage} title="Estimated tokens and cost for this response">
+              {formatTokenCount(msg.usage.totalTokens)} tok ·{' '}
+              {formatCostUSD(msg.usage.costUSD, msg.usage.freeTier)}
+              {msg.usage.freeTier ? ' · free tier' : ''}
+            </span>
+          )}
         </div>
       </div>
+    )
+  }
+
+  const needsApiKey = providersAvailable !== null && providersAvailable.length === 0
+  const showRateLimit = rateLimitUntil != null && rateLimitUntil > Date.now()
+
+  function inputBar(centered: boolean) {
+    return (
+      <>
+        {showRateLimit && (
+          <QuotaCooldown
+            until={rateLimitUntil!}
+            providerLabel={rateLimitProvider}
+            onExpired={clearRateLimit}
+            compact={centered}
+          />
+        )}
+        <AgentActivityBar compact={!centered} onCancel={isStreaming ? handleCancel : undefined} />
+        {showRetryBar && (
+          <PromptRetryBar
+            prompt={lastUserPrompt}
+            disabled={isStreaming}
+            onTryAgain={() => handleSend(undefined, { retry: true })}
+            onEdit={() => handleSend(lastUserPrompt, { refillOnly: true })}
+            onVariant={() => handleSend(undefined, { variant: true })}
+          />
+        )}
+        <div style={centered ? styles.inputBlockCentered : styles.inputBlock}>
+          {needsApiKey && (
+            <p style={centered ? styles.promptKeyHintCentered : styles.promptKeyHint}>
+              Add a free or personal API key in{' '}
+              <Link to="/settings" style={styles.promptKeyLink}>Settings</Link>
+              {' '}before your first sound — Web Apps need no key.
+            </p>
+          )}
+          <div style={styles.inputInner}>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSend()
+                }
+              }}
+              placeholder={
+                isStreaming
+                  ? 'Dr.C is working on your request…'
+                  : showRateLimit
+                    ? 'Free-tier rate limit — wait for the countdown…'
+                  : needsApiKey
+                    ? 'Describe your first sound…'
+                    : 'Describe a sound...'
+              }
+              style={styles.textarea}
+              rows={1}
+              disabled={isStreaming || showRateLimit}
+            />
+            <button
+              onClick={() => (isStreaming ? handleCancel() : handleSend())}
+              disabled={isStreaming ? false : !input.trim() || showRateLimit}
+              style={{
+                ...styles.sendBtn,
+                opacity: isStreaming ? 1 : !input.trim() ? 0.3 : 1,
+              }}
+              title={isStreaming ? 'Cancel this request' : 'Send'}
+            >{isStreaming ? '✕' : '↑'}</button>
+          </div>
+          <div style={styles.inputFooter}>
+            <div style={styles.modeSwitch}>
+              {(Object.keys(MODE_INFO) as AgentMode[]).map((m) => (
+                <button key={m} onClick={() => setAgentMode(m)}
+                  style={{ ...styles.modeBtn, ...(agentMode === m ? { background: 'var(--bg-secondary)', color: MODE_INFO[m].color } : {}) }}>
+                  {MODE_INFO[m].label}
+                </button>
+              ))}
+            </div>
+            <div style={styles.footerRight}>
+              <ProfileBadge />
+              <span style={styles.hint}>CSD · Web App · Cabbage</span>
+            </div>
+          </div>
+        </div>
+      </>
     )
   }
 
@@ -451,35 +926,33 @@ export default function AgentPage() {
           >
             ＋ New
           </button>
+          <div style={styles.topBarSpacer} />
+          <StudyFlowButton
+            studyInput={agentStudyInput}
+            label="Study flow"
+            title="Block diagram of the current Agent instrument"
+          />
         </div>
         {messages.length === 0 ? (
           /* Landing — centered hero + input (Claude-style) */
           <div style={styles.landing}>
-            {providersAvailable !== null && providersAvailable.length === 0 && (
-              <div style={styles.noKeyBanner}>
-                <span>No API key configured. </span>
-                <Link to="/settings" style={styles.noKeyLink}>Add a free Gemini key →</Link>
-              </div>
-            )}
             <div style={styles.landingInner}>
               <div style={styles.logo}>
                 <span style={styles.logoDr}>Dr</span><span style={styles.logoC}>C</span>
               </div>
               <p style={styles.emptyTitle}>What do you want to hear?</p>
               <p style={styles.emptyDesc}>
-                Describe a sound. I'll generate a Csound instrument, play it, and open it as an artifact you can edit, export as a web app, or build into a Cabbage plugin.
+                {needsApiKey
+                  ? 'No API key yet? Explore bundled Csound models on the Player tab, or open Web Apps — both work offline.'
+                  : 'Describe a sound in your own words. Curated web demos live under the Web Apps tab.'}
               </p>
-              {inputBar(true)}
-              <div style={styles.pills}>
-                {[
-                  'FM bell with shimmering decay',
-                  'Thick analog bass with filter sweep',
-                  'Granular cloud texture',
-                  'Ambient generative pad',
-                ].map((s) => (
-                  <button key={s} onClick={() => handleSend(s)} style={styles.pill} disabled={isStreaming}>{s}</button>
-                ))}
+              <div style={styles.workshopRow}>
+                <Link to="/player?demos=1" style={styles.workshopBtn}>
+                  Explore Csound Models in Player
+                </Link>
+                <Link to="/apps" style={styles.workshopLink}>Web Apps →</Link>
               </div>
+              {inputBar(true)}
             </div>
           </div>
         ) : (
@@ -500,7 +973,7 @@ export default function AgentPage() {
                           <span style={{ ...styles.dot, animationDelay: '0.36s' }} />
                         </div>
                         <span style={styles.thinkingLabel}>
-                          {awaitingFirstChunk ? 'Thinking…' : 'Composing…'}
+                          {agentActivity || (awaitingFirstChunk ? 'Waiting for the model…' : 'Writing your CSD…')}
                         </span>
                       </div>
                     </div>
@@ -510,52 +983,25 @@ export default function AgentPage() {
               <div ref={messagesEndRef} />
             </div>
             <div style={styles.inputArea}>
+              <UsageBar area="agent" />
               {inputBar(false)}
             </div>
           </>
         )}
       </div>
 
-      {/* Artifact panel (co-work) */}
-      {panelOpen && <ArtifactPanel onConvert={requestConversion} />}
+      {/* Artifact panel (co-work) — defer Monaco until CSD is complete */}
+      {panelOpen && (
+        <ErrorBoundary
+          label="Artifact editor"
+          onError={() => useEditorStore.getState().setForcePlain(true)}
+        >
+          <ArtifactPanel onConvert={requestConversion} />
+        </ErrorBoundary>
+      )}
+      {showApiKeyDialog && <ApiKeyPromptDialog onClose={() => setShowApiKeyDialog(false)} />}
     </div>
   )
-
-  function inputBar(centered: boolean) {
-    return (
-      <div style={centered ? styles.inputBlockCentered : styles.inputBlock}>
-        <div style={styles.inputInner}>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-            placeholder="Describe a sound..."
-            style={styles.textarea}
-            rows={1}
-          />
-          <button
-            onClick={() => handleSend()}
-            disabled={!input.trim() || isStreaming}
-            style={{ ...styles.sendBtn, opacity: !input.trim() || isStreaming ? 0.3 : 1 }}
-          >↑</button>
-        </div>
-        <div style={styles.inputFooter}>
-          <div style={styles.modeSwitch}>
-            {(Object.keys(MODE_INFO) as AgentMode[]).map((m) => (
-              <button key={m} onClick={() => setAgentMode(m)}
-                style={{ ...styles.modeBtn, ...(agentMode === m ? { background: 'var(--bg-secondary)', color: MODE_INFO[m].color } : {}) }}>
-                {MODE_INFO[m].label}
-              </button>
-            ))}
-          </div>
-          <div style={styles.footerRight}>
-            <ProfileBadge />
-            <span style={styles.hint}>CSD · Web App · Cabbage</span>
-          </div>
-        </div>
-      </div>
-    )
-  }
 }
 
 const styles: Record<string, CSSProperties> = {
@@ -566,9 +1012,11 @@ const styles: Record<string, CSSProperties> = {
   topBar: {
     display: 'flex',
     gap: 6,
+    alignItems: 'center',
     padding: '8px 16px',
     borderBottom: '1px solid var(--border-subtle)',
   },
+  topBarSpacer: { flex: 1 },
   topBtn: {
     border: '1px solid var(--border)',
     background: 'transparent',
@@ -584,6 +1032,47 @@ const styles: Record<string, CSSProperties> = {
   messages: { flex: 1, overflow: 'auto', padding: '24px 0' },
 
   userRow: { display: 'flex', justifyContent: 'flex-end', padding: '3px 28px' },
+  userBubbleCol: {
+    maxWidth: 560,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  userPromptBtn: {
+    textAlign: 'left',
+    maxWidth: 560,
+    background: 'var(--accent-muted)',
+    borderRadius: '16px 16px 4px 16px',
+    padding: '10px 16px',
+    border: '1px solid transparent',
+    cursor: 'pointer',
+    fontSize: 14,
+    lineHeight: 1.65,
+    color: 'var(--text-primary)',
+    whiteSpace: 'pre-wrap',
+    fontFamily: 'var(--font-primary)',
+  },
+  userPromptBtnDisabled: {
+    opacity: 0.55,
+    cursor: 'not-allowed',
+  },
+  userPromptActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'flex-end',
+  },
+  userPromptAction: {
+    fontSize: 11,
+    fontWeight: 500,
+    padding: '4px 10px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'var(--bg-secondary)',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+  },
   userBubble: {
     maxWidth: 560, background: 'var(--accent-muted)', borderRadius: '16px 16px 4px 16px', padding: '10px 16px',
   },
@@ -615,6 +1104,54 @@ const styles: Record<string, CSSProperties> = {
     fontStyle: 'italic',
     margin: 0,
   },
+  errorBubble: {
+    maxWidth: 520,
+    padding: '14px 18px',
+    borderRadius: 12,
+    border: '1.5px solid #c45c5c',
+    background: 'rgba(196, 92, 92, 0.08)',
+  },
+  errorLabel: {
+    display: 'block',
+    fontSize: 10,
+    fontWeight: 600,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    color: '#c45c5c',
+    marginBottom: 6,
+  },
+  errorText: {
+    fontSize: 13.5,
+    lineHeight: 1.55,
+    color: 'var(--text-primary)',
+    margin: 0,
+  },
+  errorActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  errorActionPrimary: {
+    fontSize: 12,
+    fontWeight: 600,
+    padding: '6px 12px',
+    borderRadius: 8,
+    border: '1px solid var(--accent)',
+    background: 'var(--accent-muted)',
+    color: 'var(--accent)',
+    cursor: 'pointer',
+  },
+  errorAction: {
+    fontSize: 12,
+    fontWeight: 500,
+    padding: '6px 12px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+  },
   suggestionRow: {
     display: 'flex',
     flexDirection: 'column',
@@ -642,6 +1179,13 @@ const styles: Record<string, CSSProperties> = {
   },
 
   msgText: { fontSize: 14, lineHeight: 1.65, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', margin: 0 },
+  msgUsage: {
+    display: 'block',
+    marginTop: 8,
+    fontSize: 10,
+    fontFamily: 'var(--font-mono)',
+    color: 'var(--text-muted)',
+  },
 
   streamingBubble: { padding: '8px 0' },
   thinkingWrap: {
@@ -673,12 +1217,6 @@ const styles: Record<string, CSSProperties> = {
   logoC: { fontSize: 44, fontWeight: 300, color: 'var(--accent)' },
   emptyTitle: { fontSize: 18, fontWeight: 500, color: 'var(--text-primary)' },
   emptyDesc: { fontSize: 14, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 460, lineHeight: 1.5 },
-  pills: { display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 4, maxWidth: 520 },
-  pill: {
-    padding: '8px 16px', borderRadius: 20, border: '1.5px solid var(--border)',
-    background: 'transparent', color: 'var(--text-secondary)', fontSize: 13,
-    cursor: 'pointer', fontFamily: 'var(--font-primary)', transition: 'all 150ms ease',
-  },
 
   inputArea: {
     padding: '10px 28px 18px', borderTop: '1px solid var(--border-subtle)',
@@ -713,14 +1251,47 @@ const styles: Record<string, CSSProperties> = {
   },
   hint: { fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' },
 
-  noKeyBanner: {
-    position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
-    padding: '8px 14px',
-    borderRadius: 10, border: '1.5px solid var(--warning, #f0b27a)',
-    background: 'var(--bg-secondary)', color: 'var(--text-secondary)',
-    fontSize: 12, display: 'flex', gap: 8, alignItems: 'center',
+  promptKeyHint: {
+    fontSize: 12,
+    lineHeight: 1.45,
+    color: 'var(--text-muted)',
+    margin: '0 0 8px',
   },
-  noKeyLink: {
-    color: 'var(--accent)', textDecoration: 'none', fontWeight: 500,
+  promptKeyHintCentered: {
+    fontSize: 12.5,
+    lineHeight: 1.45,
+    color: 'var(--text-muted)',
+    margin: '0 0 10px',
+    textAlign: 'center',
+  },
+  promptKeyLink: {
+    color: 'var(--accent)',
+    textDecoration: 'none',
+    fontWeight: 500,
+  },
+  workshopRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  workshopBtn: {
+    padding: '8px 14px',
+    borderRadius: 10,
+    border: '1.5px solid var(--accent)',
+    background: 'var(--accent-muted)',
+    color: 'var(--accent)',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'var(--font-primary)',
+  },
+  workshopLink: {
+    fontSize: 12,
+    color: 'var(--accent)',
+    textDecoration: 'none',
+    fontWeight: 500,
   },
 }

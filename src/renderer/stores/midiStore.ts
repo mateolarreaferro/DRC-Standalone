@@ -38,7 +38,7 @@ const bindingKey = (portId: string, cc: number) => `${portId}:${cc}`
 export const useMidiStore = create<MidiState>()(
   persist(
     (set, get) => ({
-      enabled: false,
+      enabled: true,
       inputs: [],
       status: 'idle',
       errorMessage: '',

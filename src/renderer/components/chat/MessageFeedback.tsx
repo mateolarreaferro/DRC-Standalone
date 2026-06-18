@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { useSessionStore } from '../../stores/sessionStore'
 
 // Line-art thumb icons (feather style, currentColor) to match the app's minimal
@@ -61,15 +61,29 @@ export default function MessageFeedback({
   content: string
 }) {
   const sendFeedback = useSessionStore((s) => s.sendFeedback)
+  const [memoryReady, setMemoryReady] = useState<boolean | null>(null)
   const [picked, setPicked] = useState<'up' | 'down' | null>(null)
   const [composing, setComposing] = useState(false)
   const [reason, setReason] = useState<string | null>(null)
   const [text, setText] = useState('')
+  const [feedbackNote, setFeedbackNote] = useState<string | null>(null)
 
-  const sendUp = () => {
+  useEffect(() => {
+    window.api?.memory?.status?.()
+      .then((s: { ready?: boolean }) => setMemoryReady(Boolean(s?.ready)))
+      .catch(() => setMemoryReady(false))
+  }, [])
+
+  const sendUp = async () => {
     if (picked) return
     setPicked('up')
-    sendFeedback('thumbs_up', { messageId, content })
+    const result = await sendFeedback('thumbs_up', { messageId, content })
+    if (result?.error === 'memory_disabled') {
+      setFeedbackNote('Memory is off — fix in Settings')
+      setPicked(null)
+    } else {
+      setFeedbackNote("noted — I'll remember")
+    }
   }
 
   const openDown = () => {
@@ -78,16 +92,22 @@ export default function MessageFeedback({
   }
 
   // Submit with whatever detail was given; Skip records the bare down signal.
-  const submitDown = (withDetail: boolean) => {
+  const submitDown = async (withDetail: boolean) => {
     setPicked('down')
     setComposing(false)
     const critique = text.trim()
-    sendFeedback('thumbs_down', {
+    const result = await sendFeedback('thumbs_down', {
       messageId,
       content,
       ...(withDetail && reason ? { reason } : {}),
       ...(withDetail && critique ? { critique } : {}),
     })
+    if (result?.error === 'memory_disabled') {
+      setFeedbackNote('Memory is off — fix in Settings')
+      setPicked(null)
+    } else {
+      setFeedbackNote("noted — I'll remember")
+    }
   }
 
   return (
@@ -109,7 +129,14 @@ export default function MessageFeedback({
         >
           <ThumbDown filled={picked === 'down'} />
         </button>
-        {picked && <span style={styles.note}>noted — I'll remember</span>}
+        {feedbackNote && (
+          <span style={{ ...styles.note, ...(feedbackNote.includes('off') ? styles.noteWarn : {}) }}>
+            {feedbackNote}
+          </span>
+        )}
+        {memoryReady === false && !feedbackNote && (
+          <span style={styles.noteWarn}>Memory off</span>
+        )}
       </div>
 
       {composing && (
@@ -247,5 +274,9 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
     fontStyle: 'italic',
     marginLeft: 4,
+  },
+  noteWarn: {
+    color: '#c45c5c',
+    fontStyle: 'normal',
   },
 }

@@ -1,6 +1,6 @@
 {
   "name": "drc",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "DrC — AI-powered Csound creative tool",
   "main": "./out/main/index.js",
   "scripts": {
@@ -10,6 +10,16 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "postinstall": "electron-builder install-app-deps",
+    "check-memory": "node scripts/check-memory.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:platform": "node scripts/test-platform-launchers.mjs",
+    "test:parity": "node scripts/test-knowledge-parity.mjs",
+    "sync:cli": "node scripts/sync-knowledge-to-cli.mjs",
+    "test:workshop": "node scripts/workshop-test.mjs",
+    "generate:workshop-handout": "node scripts/generate-workshop-handout.mjs",
+    "generate:install-slide": "node scripts/generate-workshop-handout.mjs --install-slide",
+    "test": "npm run test:workshop",
     "extract-knowledge": "node scripts/extract-knowledge.mjs",
     "extract-knowledge:dry": "node scripts/extract-knowledge.mjs --dry-run",
     "dist": "npm run build && electron-builder",
@@ -104,6 +114,7 @@
     "electron": "^34.3.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^3.1.0",
+    "pdfkit": "^0.19.1",
     "typescript": "^5.8.0",
     "vite": "^6.3.0"
   }

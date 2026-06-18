@@ -2,6 +2,7 @@ import { IpcMain } from 'electron'
 import { generateText } from 'ai'
 import { Provider } from '../provider/provider'
 import { Log } from '../util/log'
+import { usageFromSdk } from '../util/usage-cost'
 
 // Extract the <CsoundSynthesizer>...</CsoundSynthesizer> block from a model
 // response. Models occasionally leak code fences or a trailing sentence despite
@@ -16,36 +17,63 @@ export function handleLlmIPC(ipcMain: IpcMain): void {
     const trimmed = String(prompt ?? '').trim()
     if (!trimmed) return { ok: false, error: 'Empty prompt' }
 
-    const { providerID, modelID } = Provider.defaultProvider()
-    let model
-    try {
-      model = Provider.getLanguageModel(providerID, modelID)
-    } catch (err: any) {
-      return { ok: false, error: `Model unavailable: ${err.message}` }
-    }
+    const primary = Provider.defaultProvider()
+    const chain = Provider.providerChain(primary, 'main')
+    let lastError = 'All configured providers failed. Check keys in Settings.'
 
-    Log.info(`llm:adaptCsd → ${providerID}/${modelID} (${trimmed.length} chars)`)
-
-    try {
-      const { text } = await generateText({
-        model: model as any,
-        messages: [{ role: 'user', content: trimmed }],
-        temperature: 0.2,
-        // 8192: an adapted CSD with chn_k bank, instr 100 helper, reverb bus,
-        // and a rewritten voice routinely lands in the 5–7K-token range. 4000
-        // truncated outputs mid-orchestra so the </CsoundSynthesizer> tag never
-        // arrived and extractCsd returned null.
-        maxTokens: 8192,
-      })
-      const csd = extractCsd(text)
-      if (!csd) {
-        Log.warn('llm:adaptCsd → response did not contain a CsoundSynthesizer block')
-        return { ok: false, error: 'Model response missing <CsoundSynthesizer> block', raw: text.slice(0, 400) }
+    for (let i = 0; i < chain.length; i++) {
+      const { providerID, modelID } = chain[i]
+      if (i > 0) {
+        Log.info(`llm:adaptCsd fallback → ${Provider.providerLabel(providerID)} (${modelID})`)
       }
-      return { ok: true, csd }
-    } catch (err: any) {
-      Log.error('llm:adaptCsd error:', err.message)
-      return { ok: false, error: err.message }
+
+      let model
+      try {
+        model = Provider.getLanguageModel(providerID, modelID)
+      } catch (err: any) {
+        lastError = `Model unavailable: ${err.message}`
+        if (i < chain.length - 1) continue
+        return { ok: false, error: lastError, providerID }
+      }
+
+      Log.info(`llm:adaptCsd → ${providerID}/${modelID} (${trimmed.length} chars)`)
+
+      try {
+        const result = await generateText({
+          model: model as any,
+          messages: [{ role: 'user', content: trimmed }],
+          temperature: 0.2,
+          maxTokens: 8192,
+        })
+
+        if (!result.text.trim()) {
+          lastError = Provider.emptyStreamMessage(providerID)
+          Log.warn(`llm:adaptCsd → empty response from ${providerID}/${modelID}`)
+          if (Provider.shouldTryNextProvider(null, true) && i < chain.length - 1) continue
+          return { ok: false, error: lastError, providerID }
+        }
+
+        const csd = extractCsd(result.text)
+        if (!csd) {
+          Log.warn('llm:adaptCsd → response did not contain a CsoundSynthesizer block')
+          return {
+            ok: false,
+            error: 'Model response missing <CsoundSynthesizer> block',
+            raw: result.text.slice(0, 400),
+            providerID,
+          }
+        }
+
+        const usage = usageFromSdk(providerID, modelID, result.usage, 'player')
+        return { ok: true, csd, usage: usage ?? undefined, providerID }
+      } catch (err: any) {
+        lastError = Provider.humanizeError(providerID, err)
+        Log.error(`llm:adaptCsd error (${providerID}):`, err.message)
+        if (Provider.shouldTryNextProvider(err, false) && i < chain.length - 1) continue
+        return { ok: false, error: lastError, providerID }
+      }
     }
+
+    return { ok: false, error: lastError }
   })
 }

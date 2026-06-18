@@ -5,11 +5,16 @@ import { Tool } from '../tool/registry'
 import { Retrieval } from '../retrieval/engine'
 import { MemoryStore } from '../memory/store'
 import { MemoryRetrieval } from '../memory/retrieve'
+import { matchGoldenShortcut } from './golden-shortcut'
 import { Lessons } from '../memory/lessons'
 import { NarrationManager } from './narration'
 import { ascending } from '../util/id'
 import { Log } from '../util/log'
 import { Bus } from '../util/bus'
+import { getCsoundEnvironmentBlock } from '../util/csound-version'
+import { usageFromSdk } from '../util/usage-cost'
+import { isProPlus, isWorkshopLite } from '../util/tier'
+import { consultSpecialists } from './specialist-consult'
 
 export interface SessionMessage {
   id: string
@@ -28,7 +33,26 @@ export interface Session {
 
 const sessions = new Map<string, Session>()
 
+/** Per-session abort + optional hook to unblock a hung stream loop. */
+const generationAbort = new Map<string, { cancelled: boolean; forceEnd?: () => void }>()
+
+/** Max wait for the main model stream (first byte or finish). */
+const STREAM_TIMEOUT_MS = 120_000
+
+export interface SendOptions {
+  /** Re-send without adding another user turn to session history. */
+  retry?: boolean
+  /** Same intent, higher temperature + fresh Csound seed hint. */
+  variant?: boolean
+}
+
 export namespace SessionManager {
+  export function cancel(sessionID: string): void {
+    const gen = generationAbort.get(sessionID)
+    if (!gen) return
+    gen.cancelled = true
+    gen.forceEnd?.()
+  }
   export function create(agentName: string): Session {
     const id = ascending('session')
     const session: Session = {
@@ -85,9 +109,10 @@ export namespace SessionManager {
 
   export async function* send(
     sessionID: string,
-    content: string
+    content: string,
+    opts: SendOptions = {},
   ): AsyncGenerator<{ type: string; content: string; toolName?: string }> {
-    const session = sessions.get(sessionID)
+    const session = get(sessionID)
     if (!session) {
       yield { type: 'error', content: `Session not found: ${sessionID}` }
       return
@@ -99,27 +124,58 @@ export namespace SessionManager {
       return
     }
 
-    // Add user message
-    const userMsg: SessionMessage = {
-      id: ascending('message'),
-      role: 'user',
-      content,
-      timestamp: Date.now(),
-    }
-    session.messages.push(userMsg)
-    // Persist (title defaults to the first user message, truncated).
-    if (!session.title) session.title = content.replace(/\s+/g, ' ').trim().slice(0, 80)
-    MemoryStore.appendMessage({ ...userMsg, sessionId: sessionID })
-    MemoryStore.touchSession(sessionID, session.title ?? undefined)
+    const retry = Boolean(opts.retry || opts.variant)
 
-    // Autofix turns are kicked off by the renderer with a fixed preamble. Detect
-    // them up front so we can (a) suppress narration and (b) pull prior fixes for
-    // similar errors out of memory. Matches both "failed to compile" and "run".
+    if (!retry) {
+      const userMsg: SessionMessage = {
+        id: ascending('message'),
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+      }
+      session.messages.push(userMsg)
+      if (!session.title) session.title = content.replace(/\s+/g, ' ').trim().slice(0, 80)
+      MemoryStore.appendMessage({ ...userMsg, sessionId: sessionID })
+      MemoryStore.touchSession(sessionID, session.title ?? undefined)
+    } else {
+      Log.info(`Retrying generation in session ${sessionID}${opts.variant ? ' (variant)' : ''}`)
+    }
+
+    yield { type: 'status', content: retry ? 'Retrying your request…' : 'Preparing your request…' }
+
     const isAutofix = /^The CSD you just wrote failed to (compile|run)\b/.test(content)
 
-    // Initialize RAG and build context
+    if (!isAutofix && !retry && !isConversionTurn(content)) {
+      const golden = matchGoldenShortcut(content)
+      if (golden) {
+        Log.info(`Golden shortcut: ${golden.starterId}`)
+        yield { type: 'status', content: 'Using verified golden pattern (Csound 7 compile-checked)…' }
+        const response = `${golden.intro}\n\n${golden.csd}`
+        yield { type: 'text', content: response }
+        const assistantMsg: SessionMessage = {
+          id: ascending('message'),
+          role: 'assistant',
+          content: response,
+          timestamp: Date.now(),
+        }
+        session.messages.push(assistantMsg)
+        MemoryStore.appendMessage({ ...assistantMsg, sessionId: sessionID })
+        MemoryStore.touchSession(sessionID)
+        Bus.emit('session:message', { sessionID, role: 'assistant', content: response })
+        return
+      }
+    }
+
+    const abort = { cancelled: false, forceEnd: undefined as (() => void) | undefined }
+    generationAbort.set(sessionID, abort)
+    const clearAbort = () => generationAbort.delete(sessionID)
+
     Retrieval.init()
-    const ragContext = Agent.isSineMode(agent) ? '' : Retrieval.formatForPrompt(content)
+    const [ragContext, specialistBrief] = await Promise.all([
+      Promise.resolve(Agent.isSineMode(agent) ? '' : Retrieval.formatForPrompt(content)),
+      !Agent.isSineMode(agent) && !isAutofix ? consultSpecialists(content) : Promise.resolve(''),
+    ])
+    const ragBlock = [ragContext, specialistBrief].filter(Boolean).join('\n\n')
     const memory = {
       lessons: MemoryRetrieval.lessonsBlock(),
       // Proactive "previous errors" on real generation turns only. On autofix turns
@@ -134,10 +190,10 @@ export namespace SessionManager {
 
     // Best-effort: learn any durable instruction this turn stated, for next time.
     // Skip autofix/conversion turns — those aren't user preferences.
-    if (!isAutofix && !isConversionTurn(content)) {
+    if (!isAutofix && !isConversionTurn(content) && !retry) {
       void Lessons.maybeCapture(content, sessionID)
     }
-    const systemPrompt = buildSystemPrompt(agent, ragContext, memory)
+    const systemPrompt = buildSystemPrompt(agent, ragBlock, memory)
 
     // Resolve model
     const resolvedModel = agent.model
@@ -148,14 +204,14 @@ export namespace SessionManager {
 
     Log.info(`Using model: ${resolvedModel.providerID}/${resolvedModel.modelID}`)
 
-    let model
-    try {
-      model = Provider.getLanguageModel(resolvedModel.providerID, resolvedModel.modelID)
-    } catch (err: any) {
-      Log.error('Model load error:', err.message)
-      yield { type: 'error', content: Provider.humanizeError(resolvedModel.providerID, err) }
-      return
+    const providerLabel = Provider.providerLabel(resolvedModel.providerID)
+    yield {
+      type: 'status',
+      content: `Calling ${providerLabel} (${resolvedModel.modelID})…`,
     }
+
+    const providerChain = Provider.providerChain(resolvedModel)
+    let activeModel = resolvedModel
 
     // Convert session history to AI SDK format
     const aiMessages = session.messages.map((m) => ({
@@ -165,8 +221,8 @@ export namespace SessionManager {
 
     // Surface any standing rule that matches this request RIGHT NEXT TO the
     // request itself. A rule buried in a 270-line system prompt is easy for the
-    // model to skip; inline it can't. Only on real requests, not autofix.
-    if (!isAutofix && aiMessages.length > 0) {
+    // model to skip; inline it can't. Only on real requests, not autofix/retry.
+    if (!isAutofix && !retry && aiMessages.length > 0) {
       const matched = MemoryRetrieval.matchedLessons(content)
       if (matched.length > 0) {
         const last = aiMessages[aiMessages.length - 1]
@@ -197,8 +253,13 @@ export namespace SessionManager {
     let mainDone = false
     let narrationDone = false
     let wake: (() => void) | null = null
+    const notifyWaiters = () => {
+      const w = wake
+      wake = null
+      w?.()
+    }
     const ready = () => new Promise<void>((r) => { wake = r })
-    const push = (c: StreamChunk) => { queue.push(c); wake?.(); wake = null }
+    const push = (c: StreamChunk) => { queue.push(c); notifyWaiters() }
 
     // Narration — best effort, grounded in the book index. Suppressed for:
     //  - autofix turns (prompt is full of error text + CSD, pushes the narrator off-script)
@@ -208,7 +269,10 @@ export namespace SessionManager {
     // isAutofix is computed earlier (drives both memory retrieval and narration).
     const isConversion = isConversionTurn(content)
     const lastCsd = lastAssistantCsd(session)
-    if (!isAutofix && !isConversion && NarrationManager.canFire(sessionID)) {
+    // Workshop / free-tier mode: skip narration (2 extra Gemini calls per turn). Each
+    // Agent message otherwise burns 3 API requests and hits the 20 RPM free cap fast.
+    const workshopLite = isWorkshopLite()
+    if (!workshopLite && !isAutofix && !isConversion && !retry && NarrationManager.canFire(sessionID)) {
       NarrationManager.markFired(sessionID)
       ;(async () => {
         try {
@@ -219,7 +283,7 @@ export namespace SessionManager {
           Log.warn(`Narration error: ${err.message}`)
         } finally {
           narrationDone = true
-          wake?.()
+          notifyWaiters()
         }
       })()
     } else {
@@ -229,35 +293,143 @@ export namespace SessionManager {
 
     // Main response stream.
     let fullContent = ''
-    ;(async () => {
-      try {
-        Log.info('Starting streamText...')
-        const stream = streamText({
-          model: model as any,
-          system: systemPrompt,
-          messages: aiMessages,
-          temperature: agent.temperature,
-          topP: agent.topP,
+    let timedOut = false
+    const baseTemperature = agent.temperature ?? 0.75
+    let streamTemperature = baseTemperature
+    if (opts.variant && aiMessages.length > 0) {
+      streamTemperature = Math.min(1, baseTemperature + 0.18)
+      const lastUser = [...aiMessages].reverse().find((m) => m.role === 'user')
+      if (lastUser) {
+        const seed = Math.floor(Math.random() * 99999) + 1
+        lastUser.content +=
+          `\n\n[Retry variant: honor the same musical intent but make fresh choices (timbre, rhythm, voicing). ` +
+          `Use \`seed ${seed}\` in the CSD header instead of seed 0.]`
+      }
+    }
+    abort.forceEnd = () => {
+      if (mainDone) return
+      if (!fullContent.trim()) {
+        push({
+          type: 'error',
+          content:
+            'Request cancelled. Wait for the timer to stop, then send once — ' +
+            'do not repeat the same prompt while a request is still running.',
         })
-        for await (const chunk of stream.textStream) {
-          fullContent += chunk
-          push({ type: 'text', content: chunk })
+      }
+      mainDone = true
+      notifyWaiters()
+    }
+    ;(async () => {
+      const timeoutId = setTimeout(() => {
+        if (mainDone) return
+        timedOut = true
+        Log.warn(`Main stream timed out after ${STREAM_TIMEOUT_MS}ms`)
+        if (!fullContent.trim()) {
+          push({
+            type: 'error',
+            content:
+              `Request timed out after ${Math.round(STREAM_TIMEOUT_MS / 1000)} seconds. ` +
+              'The model did not respond in time — this can happen on a busy free-tier key. ' +
+              'Wait for any rate-limit countdown, then try once more. ' +
+              'Groq or local Ollama in Settings are faster fallbacks.',
+          })
+        }
+        mainDone = true
+        notifyWaiters()
+      }, STREAM_TIMEOUT_MS)
+
+      try {
+        let succeeded = false
+        let lastError = ''
+
+        for (let i = 0; i < providerChain.length; i++) {
+          if (abort.cancelled || timedOut) break
+
+          const candidate = providerChain[i]
+          if (i > 0) {
+            fullContent = ''
+            activeModel = candidate
+            push({
+              type: 'status',
+              content: `Trying ${Provider.providerLabel(candidate.providerID)} (${candidate.modelID})…`,
+            })
+            Log.info(`Fallback to ${candidate.providerID}/${candidate.modelID}`)
+          }
+
+          try {
+            const attemptModel = Provider.getLanguageModel(candidate.providerID, candidate.modelID)
+            Log.info('Starting streamText...')
+            const stream = streamText({
+              model: attemptModel as any,
+              system: systemPrompt,
+              messages: aiMessages,
+              temperature: streamTemperature,
+              topP: agent.topP,
+            })
+            for await (const chunk of stream.textStream) {
+              if (abort.cancelled || timedOut) break
+              fullContent += chunk
+              push({ type: 'text', content: chunk })
+            }
+            if (fullContent.trim()) {
+              succeeded = true
+              activeModel = candidate
+              try {
+                const rawUsage = await Promise.race([
+                  stream.usage,
+                  new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 8000)),
+                ])
+                const record = usageFromSdk(
+                  activeModel.providerID,
+                  activeModel.modelID,
+                  rawUsage,
+                  'main',
+                )
+                if (record) push({ type: 'usage', content: JSON.stringify(record) })
+              } catch (err: any) {
+                Log.warn(`Usage unavailable: ${err.message}`)
+              }
+              break
+            }
+            lastError = Provider.emptyStreamMessage(candidate.providerID)
+            Log.warn(`Empty stream from ${candidate.providerID}/${candidate.modelID}`)
+            if (!Provider.shouldTryNextProvider(null, true) || i >= providerChain.length - 1) break
+          } catch (err: any) {
+            lastError = `LLM Error: ${Provider.humanizeError(candidate.providerID, err)}`
+            Log.warn(`Stream failed on ${candidate.providerID}: ${err.message}`)
+            if (!Provider.shouldTryNextProvider(err, false) || i >= providerChain.length - 1) break
+          }
+        }
+
+        if (!fullContent.trim() && !abort.cancelled && !timedOut) {
+          push({
+            type: 'error',
+            content:
+              lastError ||
+              'All configured providers returned no output. Check keys in Settings or wait for rate limits to clear.',
+          })
         }
       } catch (err: any) {
         Log.error('Stream error:', err.message)
-        push({ type: 'error', content: `LLM Error: ${Provider.humanizeError(resolvedModel.providerID, err)}` })
+        push({ type: 'error', content: `LLM Error: ${Provider.humanizeError(activeModel.providerID, err)}` })
       } finally {
+        clearTimeout(timeoutId)
         mainDone = true
-        wake?.()
+        notifyWaiters()
       }
     })()
 
-    while (!mainDone || !narrationDone || queue.length > 0) {
-      if (queue.length === 0) {
-        await ready()
-        continue
+    try {
+      while (!mainDone || !narrationDone || queue.length > 0) {
+        if (abort.cancelled && mainDone && narrationDone && queue.length === 0) break
+        if (queue.length === 0) {
+          await ready()
+          continue
+        }
+        yield queue.shift()!
       }
-      yield queue.shift()!
+    } finally {
+      clearAbort()
     }
 
     Log.info(`Stream finished: ${fullContent.length} chars`)
@@ -335,22 +507,23 @@ ${ragContext}
 
   parts.push(`<environment>
 - Platform: ${process.platform}
-- Csound: Available via CLI
+${getCsoundEnvironmentBlock()}
+- Tier: ${isProPlus() ? 'Pro+ (Gemini Pro, book RAG, specialist consults, narration on)' : 'Standard'}
 - Session mode: ${agent.options?.sineMode ? 'Sine' : 'Complex'}
 </environment>
 
 <artifacts>
 You can create three types of artifacts. The user's UI auto-detects them from your output and renders them as interactive panels (like Claude's artifacts).
 
-1. **CSD Instrument** — Output a complete \`<CsoundSynthesizer>...<\/CsoundSynthesizer>\` block. The UI will auto-play it and show it as an editable artifact with Play/Stop controls.
+1. **CSD Instrument** — Output a complete \`<CsoundSynthesizer>...<\/CsoundSynthesizer>\` block. The UI will auto-play it and show it as an editable artifact with Play/Stop controls. Default score: a short musical demo (scale, arpeggios, ostinato, closing chord) so the user hears what the instrument can do — not one long held note.
 
-2. **Web App** — When the user asks for a web app, output a complete HTML document starting with \`<!DOCTYPE html>\`. Embed the CSD in a \`<script type="text/csound">\` tag and use \`@csound/browser\` from CDN. The UI will render it in a live iframe preview. Include interactive controls (knobs, buttons, keyboard) styled with a dark theme.
+2. **Web App** — Dr.C builds the HTML host for you. When the user converts to a web app (or asks to "export as web app"), emit ONLY a web-ready \`<CsoundSynthesizer>…</CsoundSynthesizer>\` orchestra CSD with \`chn_k\` control declarations. Do NOT write HTML or JavaScript — the app wraps your orchestra into a WASM7 page with sliders, Start/Stop, and keyboard. Put score lines only in \`<CsScore>\`, never inside \`<CsInstruments>\`.
 
 3. **VST Plugin** — When the user asks for a VST/AU plugin, output a CSD with a \`<Cabbage>\` section before \`<CsoundSynthesizer>\`. Auto-generate Cabbage widgets (rslider, combobox, keyboard) mapped to the k-rate parameters. The UI will show the plugin configuration.
 
 Always output the full artifact code — never truncate or use placeholders.
 
-Pick the format from the user's intent, not from a default. If the user mentions a "web app", "web version", "website", "browser", or "HTML", emit a Web App (\`<!DOCTYPE html>\`). If they mention a "VST", "AU", "plugin", "Cabbage", or "DAW", emit a VST. Otherwise emit a CSD. When the user asks to switch an existing artifact — "make it a web app", "turn this into a plugin", "give me the plain CSD" — transform the current artifact into the requested format and emit the full document in that format; do not keep the old format.
+Pick the format from the user's intent, not from a default. Web app / export-as-web-app → orchestra CSD with \`chn_k\` (not HTML). VST / Cabbage / DAW → \`<Cabbage>\` + CSD. Otherwise emit a plain CSD. When switching an existing artifact, follow the conversion template the user message includes — it overrides these defaults.
 </artifacts>
 
 <response-style>

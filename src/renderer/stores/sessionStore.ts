@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import type { UsageRecord } from '../lib/usageFormat'
+import { useUsageStore } from './usageStore'
 
 export type AgentMode = 'csound' | 'csound-sine'
 
@@ -6,10 +8,11 @@ export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
-  type?: 'text' | 'tool_call' | 'tool_result' | 'narration'
+  type?: 'text' | 'tool_call' | 'tool_result' | 'narration' | 'error'
   toolName?: string
   timestamp: number
   suggestions?: string[] // one-click follow-up prompts (on narration messages)
+  usage?: UsageRecord
 }
 
 // What failed last, so a subsequent successful play can be recorded as an
@@ -18,6 +21,7 @@ export interface LastFailure {
   errorRaw: string
   brokenCsd: string
   kind: 'compile' | 'runtime'
+  artifactId?: string
 }
 
 interface SessionState {
@@ -25,7 +29,11 @@ interface SessionState {
   messages: Message[]
   agentMode: AgentMode
   isStreaming: boolean
+  agentActivity: string | null
+  agentActivityStartedAt: number | null
   lastFailure: LastFailure | null
+  /** Artifact being auto-fixed — fix responses update this, not a new artifact. */
+  pendingAutofixArtifactId: string | null
   setSessionID: (id: string) => void
   addMessage: (msg: Message) => void
   appendToLast: (content: string) => void
@@ -33,10 +41,14 @@ interface SessionState {
   setMessageSuggestions: (id: string, suggestions: string[]) => void
   setAgentMode: (mode: AgentMode) => void
   setStreaming: (streaming: boolean) => void
+  setAgentActivity: (label: string | null) => void
   clearMessages: () => void
   startNewSession: () => void
   setLastFailure: (f: LastFailure | null) => void
-  sendFeedback: (kind: string, payload?: Record<string, unknown>) => void
+  setPendingAutofixArtifactId: (id: string | null) => void
+  attachUsageToMessage: (messageId: string, usage: UsageRecord) => void
+  removeFailedAssistantTurn: () => void
+  sendFeedback: (kind: string, payload?: Record<string, unknown>) => Promise<{ id?: string | null; error?: string } | void>
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -44,7 +56,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   messages: [],
   agentMode: 'csound',
   isStreaming: false,
+  agentActivity: null,
+  agentActivityStartedAt: null,
   lastFailure: null,
+  pendingAutofixArtifactId: null,
 
   setSessionID: (id) => set({ sessionID: id }),
 
@@ -82,20 +97,78 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }),
 
   setAgentMode: (mode) => set({ agentMode: mode }),
-  setStreaming: (streaming) => set({ isStreaming: streaming }),
-  clearMessages: () => set({ messages: [] }),
+  setStreaming: (streaming) =>
+    set((s) => ({
+      isStreaming: streaming,
+      ...(streaming && !s.agentActivityStartedAt
+        ? { agentActivityStartedAt: Date.now(), agentActivity: s.agentActivity ?? 'Starting…' }
+        : {}),
+      ...(!streaming ? { agentActivity: null, agentActivityStartedAt: null } : {}),
+    })),
+  setAgentActivity: (label) =>
+    set((s) => ({
+      agentActivity: label,
+      agentActivityStartedAt: label ? (s.agentActivityStartedAt ?? Date.now()) : null,
+    })),
+  clearMessages: () => set({ messages: [], agentActivity: null, agentActivityStartedAt: null }),
 
   // Drop back to a clean slate; the next send() mints a fresh persisted session.
-  startNewSession: () => set({ sessionID: null, messages: [], lastFailure: null }),
+  startNewSession: () => {
+    useUsageStore.getState().resetArea('agent')
+    set({
+      sessionID: null,
+      messages: [],
+      lastFailure: null,
+      pendingAutofixArtifactId: null,
+      agentActivity: null,
+      agentActivityStartedAt: null,
+    })
+  },
 
   setLastFailure: (f) => set({ lastFailure: f }),
+
+  setPendingAutofixArtifactId: (id) => set({ pendingAutofixArtifactId: id }),
+
+  attachUsageToMessage: (messageId, usage) =>
+    set((s) => {
+      const idx = s.messages.findIndex((m) => m.id === messageId)
+      if (idx === -1) return {}
+      const msgs = [...s.messages]
+      msgs[idx] = { ...msgs[idx], usage }
+      return { messages: msgs }
+    }),
+
+  removeFailedAssistantTurn: () =>
+    set((s) => {
+      const msgs = [...s.messages]
+      while (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        if (last.role !== 'assistant') break
+        if (last.type === 'error') {
+          msgs.pop()
+          continue
+        }
+        if (last.type === 'narration') {
+          msgs.pop()
+          continue
+        }
+        const hasCompleteCsd = /<CsoundSynthesizer[\s\S]*<\/CsoundSynthesizer>/i.test(last.content)
+        const hasWebApp = /<!DOCTYPE\s+html[\s\S]*<\/html>/i.test(last.content)
+        if (!hasCompleteCsd && !hasWebApp) {
+          msgs.pop()
+          continue
+        }
+        break
+      }
+      return { messages: msgs }
+    }),
 
   sendFeedback: (kind, payload) => {
     const sessionID = get().sessionID
     const p = window.api?.memory?.feedback?.(kind, { sessionId: sessionID, ...payload })
-    // Let the profile badge refresh once the heuristic model has updated.
-    void Promise.resolve(p).then(() =>
-      window.dispatchEvent(new CustomEvent('drc:profile-changed')),
-    )
+    return Promise.resolve(p).then((result) => {
+      window.dispatchEvent(new CustomEvent('drc:profile-changed'))
+      return result as { id?: string | null; error?: string } | void
+    })
   },
 }))

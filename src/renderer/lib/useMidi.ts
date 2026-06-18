@@ -34,21 +34,28 @@ export interface MidiHandlers {
 //
 // The hook owns the lifetime of `onmidimessage` per input — it reattaches when
 // the device list changes so hot-plug works without a refresh.
-export function useMidi(handlers: MidiHandlers, knobChange: (channel: string, normalized: number) => void): void {
-  const setStatus  = useMidiStore((s) => s.setStatus)
-  const setInputs  = useMidiStore((s) => s.setInputs)
-  const enabled    = useMidiStore((s) => s.enabled)
-  // Pull ref-ish bits via getState() inside the message handler to avoid stale
-  // closures every time bindings change — re-subscribing every binding edit
-  // would drop incoming MIDI mid-press.
+export function useMidi(
+  handlers: MidiHandlers,
+  knobChange: (channel: string, normalized: number) => void,
+  /** Re-attach Web MIDI inputs when the Player engine goes live (hot-plug after csound start). */
+  engineLive = true,
+): void {
+  const setStatus = useMidiStore((s) => s.setStatus)
+  const setInputs = useMidiStore((s) => s.setInputs)
+  const enabled = useMidiStore((s) => s.enabled)
   const handlersRef = useRef(handlers)
   const knobChangeRef = useRef(knobChange)
   handlersRef.current = handlers
   knobChangeRef.current = knobChange
 
+  const accessRef = useRef<MIDIAccessLike | null>(null)
+  const bindInputsRef = useRef<(() => void) | null>(null)
+
   useEffect(() => {
     if (!enabled) {
       setStatus('idle')
+      accessRef.current = null
+      bindInputsRef.current = null
       return
     }
 
@@ -60,14 +67,12 @@ export function useMidi(handlers: MidiHandlers, knobChange: (channel: string, no
       return
     }
 
-    let access: MIDIAccessLike | null = null
     let cancelled = false
 
     const handleMessage = (portId: string) => (ev: MIDIMessageLike) => {
       const data = ev.data
       if (!data || data.length < 2) return
       const status = data[0] & 0xf0
-      // noteOn with velocity 0 is a noteOff in convention.
       if (status === 0x90 && data[2] > 0) {
         handlersRef.current.onNoteOn(data[1], data[2] / 127)
         return
@@ -80,21 +85,21 @@ export function useMidi(handlers: MidiHandlers, knobChange: (channel: string, no
         const cc = data[1]
         const value = data[2] / 127
         const state = useMidiStore.getState()
-        // If a knob is asking to learn, capture this CC — first event wins.
         if (state.learnTarget) {
           state.bind(cc, portId, state.learnTarget)
           return
         }
-        // Otherwise, route through the persisted bindings.
         const binding: MidiBinding | undefined = findBinding(state.bindings, portId, cc)
         if (binding) {
           knobChangeRef.current(binding.channel, value)
+          return
         }
         handlersRef.current.onCC?.(cc, value, portId)
       }
     }
 
-    const refreshInputs = () => {
+    const bindInputs = () => {
+      const access = accessRef.current
       if (!access || cancelled) return
       const list: { id: string; name: string; manufacturer: string }[] = []
       for (const input of access.inputs.values()) {
@@ -103,21 +108,21 @@ export function useMidi(handlers: MidiHandlers, knobChange: (channel: string, no
           name: input.name ?? input.id,
           manufacturer: input.manufacturer ?? '',
         })
-        // Reattach handler — Map.values() may return new objects on hotplug.
         input.onmidimessage = handleMessage(input.id)
       }
       setInputs(list)
     }
+    bindInputsRef.current = bindInputs
 
     setStatus('requesting')
     nav.requestMIDIAccess({ sysex: false })
       .then((acc) => {
         if (cancelled) return
-        access = acc as MIDIAccessLike
-        access.onstatechange = (ev: MIDIPortStateChangeEvent) => {
-          if (ev.port.type === 'input') refreshInputs()
+        accessRef.current = acc as MIDIAccessLike
+        accessRef.current.onstatechange = (ev: MIDIPortStateChangeEvent) => {
+          if (ev.port.type === 'input') bindInputs()
         }
-        refreshInputs()
+        bindInputs()
         setStatus('ready')
       })
       .catch((err: unknown) => {
@@ -128,10 +133,18 @@ export function useMidi(handlers: MidiHandlers, knobChange: (channel: string, no
 
     return () => {
       cancelled = true
+      bindInputsRef.current = null
+      const access = accessRef.current
       if (access) {
         for (const input of access.inputs.values()) input.onmidimessage = null
         access.onstatechange = null
       }
+      accessRef.current = null
     }
   }, [enabled, setInputs, setStatus])
+
+  useEffect(() => {
+    if (!enabled || !engineLive) return
+    bindInputsRef.current?.()
+  }, [enabled, engineLive])
 }

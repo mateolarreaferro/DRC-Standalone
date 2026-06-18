@@ -147,6 +147,93 @@ function camelToTitle(name: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
+function clampChannelValue(min: number, max: number, v: number): number {
+  return Math.min(max, Math.max(min, v))
+}
+
+/** Fallback spec for orchestra-header `chnset` lines (Fractal Explorer pattern). */
+function specFromChnset(name: string, defaultVal: number): ChannelSpec | null {
+  if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null
+  if (!Number.isFinite(defaultVal)) return null
+
+  const n = name.toLowerCase()
+  const label = camelToTitle(name)
+
+  if (/attack|att/.test(n)) {
+    const min = 0.001
+    const max = 2
+    return {
+      name,
+      label,
+      min,
+      max,
+      default: clampChannelValue(min, max, defaultVal),
+      step: 0.001,
+      unit: 's',
+      curve: 'exp',
+    }
+  }
+  if (/release|rel|decay/.test(n)) {
+    const min = 0.01
+    const max = 6
+    return {
+      name,
+      label,
+      min,
+      max,
+      default: clampChannelValue(min, max, defaultVal),
+      step: 0.01,
+      unit: 's',
+      curve: 'exp',
+    }
+  }
+  if ((/cutoff|freq|pitch/.test(n) && !/mix/.test(n)) || n === 'frequency') {
+    const min = 20
+    const max = 18000
+    return {
+      name,
+      label,
+      min,
+      max,
+      default: clampChannelValue(min, max, defaultVal),
+      step: 1,
+      unit: 'Hz',
+      curve: 'exp',
+    }
+  }
+  if (
+    /volume|vol|mix|wet|dry|size|room|bright|depth|send|sustain|master|reverb|reson|index|mod|amp|level|gain/.test(
+      n,
+    )
+  ) {
+    const min = 0
+    const max = 1
+    return {
+      name,
+      label,
+      min,
+      max,
+      default: clampChannelValue(min, max, defaultVal),
+      step: 0.01,
+      unit: '',
+      curve: 'lin',
+    }
+  }
+
+  const min = 0
+  const max = defaultVal <= 1 ? 1 : Math.max(defaultVal * 2, 1)
+  return {
+    name,
+    label,
+    min,
+    max,
+    default: clampChannelValue(min, max, defaultVal),
+    step: defaultStep(min, max, 'lin'),
+    unit: '',
+    curve: 'lin',
+  }
+}
+
 export function parseChannels(csd: string): ChannelSpec[] {
   if (!csd) return []
   const orchestra = stripComments(extractOrchestra(csd))
@@ -205,6 +292,17 @@ export function parseChannels(csd: string): ChannelSpec[] {
       unit: attrs.unit || '',
       curve,
     })
+  }
+
+  // Fractal Explorer and workshop starters often use chnset at orchestra scope
+  // without chn_k metadata — synthesize sliders from those defaults.
+  const chnsetRe = /^[ \t]*chnset\s+([^,\n]+)\s*,\s*(?:"([^"]+)"|'([^']+)')\s*$/gm
+  while ((m = chnsetRe.exec(orchestra))) {
+    const defaultVal = parseFloat(m[1])
+    const name = m[2] ?? m[3]
+    if (!name || found.has(name)) continue
+    const spec = specFromChnset(name, defaultVal)
+    if (spec) found.set(name, spec)
   }
 
   // Preserve declaration order — Csound treats chn_k as a one-shot init, so the

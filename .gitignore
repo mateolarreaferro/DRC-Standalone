@@ -23,3 +23,6 @@ Thumbs.db
 
 # Knowledge extractor cache (extracted book text + per-chunk checkpoints)
 scripts/.cache/
+
+# Local adapt smoke scratch (not shipped)
+.tmp-adapt-check/

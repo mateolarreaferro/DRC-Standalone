@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback, useEffect, type CSSProperties } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo, type CSSProperties } from 'react'
 import { useEditorStore } from '../stores/editorStore'
+import StudyFlowButton from '../components/study/StudyFlowButton'
+import type { SignalFlowStudyInput } from '../lib/signalFlowStudy'
 
 // Real, self-contained finished apps — bundled at build time so clicking a card
 // shows the actual drum machine / FM bell / etc. interface, not a generated shell.
@@ -178,6 +180,7 @@ export default function WebAppsPage() {
   // panel is hidden by default and revealed on demand via "Open Code".
   const [codeFrac, setCodeFrac] = useState(0.4)
   const [showCode, setShowCode] = useState(false)
+  const [browserStatus, setBrowserStatus] = useState('')
   const splitRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
   const { setCsdContent } = useEditorStore()
@@ -223,15 +226,43 @@ export default function WebAppsPage() {
     }
   }
 
+  const handleOpenInBrowser = async () => {
+    if (!selectedApp) return
+    const html = appCode || buildHtmlApp(selectedApp)
+    setBrowserStatus('Opening in browser…')
+    const res = await window.api?.export?.openInBrowser?.(html, selectedApp.name)
+    if (res?.success) {
+      setBrowserStatus('Opened in browser')
+      setTimeout(() => setBrowserStatus(''), 5000)
+    } else {
+      setBrowserStatus(res?.error ? String(res.error).slice(0, 120) : 'Could not open browser')
+    }
+  }
+
+  const studyForApp = useCallback((app: AppTemplate, html?: string): SignalFlowStudyInput => {
+    const raw = html ?? app.html ?? buildHtmlApp(app)
+    return {
+      title: app.name,
+      source: raw.includes('const ORC') ? raw : buildFullCsd(app),
+    }
+  }, [])
+
+  const studyInput = useMemo(
+    () => (selectedApp ? studyForApp(selectedApp, appCode || undefined) : null),
+    [selectedApp, appCode, studyForApp],
+  )
+
   return (
     <div style={styles.container}>
       {!selectedApp ? (
         /* Gallery view */
         <>
           <div style={styles.header}>
-            <h1 style={styles.title}>Web Apps</h1>
+            <div style={styles.headerTitleRow}>
+              <h1 style={styles.title}>Web Apps</h1>
+            </div>
             <p style={styles.subtitle}>
-              Build interactive Csound web applications. Start from a reference app or create from scratch.
+              Interactive Csound web apps — open any card to preview, or use Study flow on each instrument for block diagrams.
             </p>
           </div>
 
@@ -246,21 +277,31 @@ export default function WebAppsPage() {
             </button>
 
             {REFERENCE_APPS.map((app) => (
-              <button
-                key={app.id}
-                style={styles.card}
-                onClick={() => handleSelectApp(app)}
-              >
-                <div style={styles.cardInfo}>
-                  <span style={styles.cardName}>{app.name}</span>
-                  <span style={styles.cardDesc}>{app.desc}</span>
-                  <div style={styles.cardTags}>
-                    {app.tags.map((t) => (
-                      <span key={t} style={styles.tag}>{t}</span>
-                    ))}
+              <div key={app.id} style={styles.card}>
+                <button
+                  type="button"
+                  style={styles.cardMain}
+                  onClick={() => handleSelectApp(app)}
+                >
+                  <div style={styles.cardInfo}>
+                    <span style={styles.cardName}>{app.name}</span>
+                    <span style={styles.cardDesc}>{app.desc}</span>
+                    <div style={styles.cardTags}>
+                      {app.tags.map((t) => (
+                        <span key={t} style={styles.tag}>{t}</span>
+                      ))}
+                    </div>
                   </div>
+                </button>
+                <div style={styles.cardStudyRow}>
+                  <StudyFlowButton
+                    studyInput={studyForApp(app)}
+                    variant="compact"
+                    label="Study flow"
+                    title={`Block diagram — ${app.name}`}
+                  />
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </>
@@ -271,6 +312,14 @@ export default function WebAppsPage() {
             <button onClick={() => setSelectedApp(null)} style={styles.backButton}>← Back</button>
             <span style={styles.appTitle}>{selectedApp.name}</span>
             <div style={styles.toolbarActions}>
+              <StudyFlowButton
+                studyInput={studyInput}
+                label="Study flow"
+                title={`Block diagram — ${selectedApp.name}`}
+              />
+              <button onClick={handleOpenInBrowser} style={styles.toolbarButton} title="Save HTML and open in your default browser">
+                Export to Browser
+              </button>
               <button onClick={handleLoadInEditor} style={styles.toolbarButton}>
                 Open in CSD Editor
               </button>
@@ -282,6 +331,9 @@ export default function WebAppsPage() {
                 {showCode ? '✕ Hide Code' : '⟨⟩ Open Code'}
               </button>
             </div>
+            {browserStatus && (
+              <span style={styles.browserStatus}>{browserStatus}</span>
+            )}
           </div>
 
           <div ref={splitRef} style={styles.editorSplit}>
@@ -397,16 +449,21 @@ ${buildFullCsd(app)}
   </script>
 
   <script type="module">
-    import { Csound } from "https://unpkg.com/@csound/browser@6.18.7/dist/csound.js";
+    import { Csound } from "https://cdn.jsdelivr.net/npm/@csound/browser@7.0.0-beta31/dist/csound.js";
 
     let csound = null;
 
     window.startCsound = async () => {
       if (!csound) {
-        csound = await Csound();
+        csound = await Csound({ useWorker: false, useSPN: false, outputChannelCount: 2 });
       }
       const csd = document.getElementById('csd').textContent;
-      await csound.compileCsdText(csd);
+      const orcM = csd.match(/<CsInstruments>([\\s\\S]*?)<\\/CsInstruments>/i);
+      const orc = orcM ? orcM[1].trim() : csd;
+      await csound.setOption("-odac");
+      await csound.setOption("-m0");
+      const status = await csound.compileOrc(orc);
+      if (status !== undefined && status !== 0) throw new Error("Csound compile failed: " + status);
       await csound.start();
     };
 
@@ -421,7 +478,8 @@ ${buildFullCsd(app)}
 const styles: Record<string, CSSProperties> = {
   container: { height: '100%', overflow: 'auto' },
   header: { padding: '40px 40px 0' },
-  title: { fontSize: 28, fontWeight: 300, color: 'var(--text-primary)', letterSpacing: '0.04em', marginBottom: 8 },
+  headerTitleRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 },
+  title: { fontSize: 28, fontWeight: 300, color: 'var(--text-primary)', letterSpacing: '0.04em', margin: 0 },
   subtitle: { fontSize: 14, color: 'var(--text-muted)', maxWidth: 500, lineHeight: 1.5 },
   gallery: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
@@ -440,8 +498,16 @@ const styles: Record<string, CSSProperties> = {
   card: {
     display: 'flex', flexDirection: 'column', minHeight: 180,
     border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--panel-radius)',
-    background: 'var(--bg-secondary)', overflow: 'hidden', cursor: 'pointer',
+    background: 'var(--bg-secondary)', overflow: 'hidden',
     transition: 'all 150ms ease', textAlign: 'left',
+  },
+  cardMain: {
+    display: 'flex', flex: 1, flexDirection: 'column', width: '100%',
+    border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, textAlign: 'left',
+  },
+  cardStudyRow: {
+    display: 'flex', alignItems: 'center', padding: '10px 14px',
+    borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-tertiary)',
   },
   cardInfo: { padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 8, flex: 1, justifyContent: 'space-between' },
   cardName: { fontSize: 17, fontWeight: 500, color: 'var(--text-primary)', letterSpacing: '-0.01em' },
@@ -464,6 +530,15 @@ const styles: Record<string, CSSProperties> = {
   },
   appTitle: { fontSize: 15, fontWeight: 500, color: 'var(--text-primary)', flex: 1 },
   toolbarActions: { display: 'flex', gap: 8 },
+  browserStatus: {
+    fontSize: 12,
+    color: 'var(--text-muted)',
+    marginLeft: 8,
+    maxWidth: 280,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   toolbarButton: {
     padding: '6px 16px', borderRadius: 8, border: 'var(--border-width) solid var(--border)',
     background: 'transparent', color: 'var(--text-secondary)', fontSize: 13,

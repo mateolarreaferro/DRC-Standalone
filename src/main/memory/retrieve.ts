@@ -1,5 +1,6 @@
 import { MemoryStore } from './store'
 import { Learning } from './learning'
+import { BUILTIN_STANDING_RULES } from './builtin-lessons'
 import type { ErrorFixRow } from './schema'
 
 // Turns stored memory into token-bounded prompt blocks. Ranking deliberately
@@ -49,39 +50,46 @@ export namespace MemoryRetrieval {
   // Lessons whose wording overlaps the current request — these are the ones to
   // surface inline with the user's message so the model can't skip them.
   export function matchedLessons(userText: string, max = 3): string[] {
+    const hits: string[] = [...BUILTIN_STANDING_RULES]
     const lessons = MemoryStore.allLessons()
-    if (lessons.length === 0) return []
     const userTokens = new Set(
       userText.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/)
         .filter((t) => t.length >= 4)
-        .map((t) => t.replace(/s$/, '')), // crude singularize so "textures"~"texture"
+        .map((t) => t.replace(/s$/, '')),
     )
-    if (userTokens.size === 0) return []
-    const hits: string[] = []
     for (const l of lessons) {
+      if (BUILTIN_STANDING_RULES.some((b) => b === l.text)) continue
       const lt = l.text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).map((t) => t.replace(/s$/, ''))
-      if (lt.some((t) => t.length >= 4 && userTokens.has(t))) hits.push(l.text)
-      if (hits.length >= max) break
+      if (userTokens.size === 0 || lt.some((t) => t.length >= 4 && userTokens.has(t))) {
+        hits.push(l.text)
+      }
+      if (hits.length >= max + BUILTIN_STANDING_RULES.length) break
     }
-    return hits
+    return hits.slice(0, max + BUILTIN_STANDING_RULES.length)
   }
 
-  // Durable instructions the user has stated. ALWAYS injected (across sessions)
-  // and given strong framing — these are explicit user rules, not soft hints.
-  export function lessonsBlock(maxChars = 1500): string {
-    const lessons = MemoryStore.allLessons()
-    if (lessons.length === 0) return ''
+  export function lessonsBlock(maxChars = 2000): string {
+    const userLessons = MemoryStore.allLessons().filter(
+      (l) => !BUILTIN_STANDING_RULES.some((b) => b === l.text),
+    )
     const lines = [
       `<remembered-instructions>`,
-      `Standing rules this user has explicitly given you. They are BINDING and OVERRIDE your default approach. Realize each rule concretely in the generated code, not just in prose. When a rule and your usual habit conflict, the rule wins. Only ignore a rule if the current request explicitly overrides it:`,
+      `Standing rules from Dr. Richard Boulanger and this user. BINDING — override defaults. Realize each rule in generated code, not prose:`,
     ]
     let budget = maxChars
-    for (const l of lessons) {
+    for (const rule of BUILTIN_STANDING_RULES) {
+      const entry = `- ${rule}`
+      if (entry.length > budget) break
+      lines.push(entry)
+      budget -= entry.length
+    }
+    for (const l of userLessons) {
       const entry = `- ${l.text}`
       if (entry.length > budget) break
       lines.push(entry)
       budget -= entry.length
     }
+    if (lines.length <= 2) return ''
     lines.push(`</remembered-instructions>`)
     return lines.join('\n')
   }

@@ -1,0 +1,1848 @@
+<CsoundSynthesizer>
+
+<CsOptions>
+
+--nodisplays --output=dac
+
+</CsOptions>
+
+<CsInstruments>
+
+sr = 44100
+ksmps = 64
+nchnls = 2
+0dbfs = 1.0
+giPort init 1
+opcode FreePort, i, 0
+xout giPort
+giPort = giPort + 1
+endop
+
+; AnalogDelay
+; ----------------
+; A analog style delay with signal degradation and saturation options
+;
+; aout  AnalogDelay  ain,kmix,ktime,kfback,ktone
+;
+; Performance
+; -----------
+; ain    --  input audio to which the flanging effect will be applied
+; kmix   --  dry / wet mix of the output signal (range 0 to 1)
+; ktime  --  delay time of the effect in seconds
+; kfback --  control of the amount of output signal fed back into the input of the effect (exceeding 1 (100%) is possible and will result in saturation clipping effects)
+; ktone  --  control of the amount of output signal fed back into the input of the effect (range 0 to 1)
+
+
+opcode	AnalogDelay,a,aKKKK
+	ain,kmix,ktime,kfback,ktone	xin			;READ IN INPUT ARGUMENTS
+	ktone	expcurve	ktone,4				;CREATE AN EXPONENTIAL REMAPPING OF ktone
+	ktone	scale	ktone,12000,100				;RESCALE 0 - 1 VALUE
+	iWet	ftgentmp	0,0,1024,-7,0,512,1,512,1	;RESCALING FUNCTION FOR WET LEVEL CONTROL
+	iDry	ftgentmp	0,0,1024,-7,1,512,1,512,0	;RESCALING FUNCTION FOR DRY LEVEL CONTROL
+	kWet	table	kmix, iWet, 1				;RESCALE WET LEVEL CONTROL ACCORDING TO FUNCTION TABLE iWet
+	kDry	table	kmix, iDry, 1                 		;RESCALE DRY LEVEL CONTROL ACCORDING TO FUNCTION TABLE iWet
+	kporttime	linseg	0,0.001,0.1			;RAMPING UP PORTAMENTO TIME
+	kTime	portk	ktime, kporttime*3			;APPLY PORTAMENTO SMOOTHING TO DELAY TIME PARAMETER
+	kTone	portk	ktone, kporttime			;APPLY PORTAMENTO SMOOTHING TO TONE PARAMETER
+	aTime	interp	kTime					;INTERPOLATE AND CREAT A-RATE VERSION OF DELAY TIME PARAMETER
+	aBuffer	delayr	5					;READ FROM (AND INITIALIZE) BUFFER
+	atap	deltap3	aTime					;TAP DELAY BUFFER
+	atap	clip	atap, 0, 0dbfs*0.8			;SIGNAL IS CLIPPED AT MAXIMUM AMPLITUDE USING BRAM DE JONG METHOD
+	atap	tone	atap, kTone				;LOW-PASS FILTER DELAY TAP WITHIN DELAY BUFFER 
+		delayw	ain+(atap*kfback)			;WRITE INPUT AUDIO AND FEEDBACK SIGNAL INTO DELAY BUFFER
+	aout	sum	ain*kDry, atap*kWet			;MIX DRY AND WET SIGNALS 
+		xout	aout					;SEND AUDIO BACK TO CALLER INSTRUMENT
+endop
+
+
+
+instr 57
+
+endin
+
+instr 56
+ event_i "i", 55, 604800.0, 1.0e-2
+endin
+
+instr 55
+ir1 = 54
+ir2 = 0.0
+ turnoff2 ir1, ir2, ir2
+ir5 = 53
+ turnoff2 ir5, ir2, ir2
+ir8 = 52
+ turnoff2 ir8, ir2, ir2
+ir11 = 51
+ turnoff2 ir11, ir2, ir2
+ir14 = 50
+ turnoff2 ir14, ir2, ir2
+ir17 = 49
+ turnoff2 ir17, ir2, ir2
+ir20 = 48
+ turnoff2 ir20, ir2, ir2
+ir23 = 47
+ turnoff2 ir23, ir2, ir2
+ir26 = 46
+ turnoff2 ir26, ir2, ir2
+ir29 = 45
+ turnoff2 ir29, ir2, ir2
+ir32 = 44
+ turnoff2 ir32, ir2, ir2
+ir35 = 43
+ turnoff2 ir35, ir2, ir2
+ir38 = 42
+ turnoff2 ir38, ir2, ir2
+ir41 = 41
+ turnoff2 ir41, ir2, ir2
+ir44 = 40
+ turnoff2 ir44, ir2, ir2
+ir47 = 39
+ turnoff2 ir47, ir2, ir2
+ir50 = 38
+ turnoff2 ir50, ir2, ir2
+ir53 = 37
+ turnoff2 ir53, ir2, ir2
+ir56 = 36
+ turnoff2 ir56, ir2, ir2
+ir59 = 35
+ turnoff2 ir59, ir2, ir2
+ir62 = 34
+ turnoff2 ir62, ir2, ir2
+ir65 = 33
+ turnoff2 ir65, ir2, ir2
+ir68 = 32
+ turnoff2 ir68, ir2, ir2
+ir71 = 31
+ turnoff2 ir71, ir2, ir2
+ir74 = 30
+ turnoff2 ir74, ir2, ir2
+ir77 = 29
+ turnoff2 ir77, ir2, ir2
+ir80 = 28
+ turnoff2 ir80, ir2, ir2
+ir83 = 27
+ turnoff2 ir83, ir2, ir2
+ir86 = 26
+ turnoff2 ir86, ir2, ir2
+ir89 = 25
+ turnoff2 ir89, ir2, ir2
+ir92 = 24
+ turnoff2 ir92, ir2, ir2
+ir95 = 23
+ turnoff2 ir95, ir2, ir2
+ir98 = 22
+ turnoff2 ir98, ir2, ir2
+ir101 = 21
+ turnoff2 ir101, ir2, ir2
+ir104 = 20
+ turnoff2 ir104, ir2, ir2
+ir107 = 19
+ turnoff2 ir107, ir2, ir2
+ir110 = 18
+ turnoff2 ir110, ir2, ir2
+ exitnow 
+endin
+
+instr 54
+ir1 = 5.0e-2
+kr0 = birnd(ir1)
+kr1 = birnd(ir1)
+ir6 = 5.0e-3
+kr2 = birnd(ir6)
+ xtratim 0.1
+ir11 = 9.0e-2
+kr3 = birnd(ir11)
+ir14 = 1.0
+ar0 upsamp k(ir14)
+kr4 = rnd(ir14)
+kr5 = rnd(ir14)
+kr6 = rnd(ir14)
+kr7 = rnd(ir14)
+kr8 = rnd(ir14)
+kr9 = rnd(ir14)
+ir27 = 0.8
+ir28 = 0.0
+ar1 noise ir27, ir28
+ xtratim 0.1
+kr10 = birnd(ir11)
+ir35 = 0.75
+ar2 noise ir35, ir28
+ xtratim 0.1
+kr11 = birnd(ir11)
+ir42 = 8.5e-2
+kr12 = birnd(ir42)
+kr13 = birnd(ir42)
+ir47 = 8.5e-3
+kr14 = birnd(ir47)
+kr15 = rnd(ir14)
+kr16 = rnd(ir14)
+ar3 noise ir35, ir28
+ xtratim 0.1
+kr17 = birnd(ir11)
+kr18 = rnd(ir14)
+ir62 = 0.4
+ar4 noise ir14, ir62
+ xtratim 0.1
+kr19 = birnd(ir11)
+kr20 = rnd(ir14)
+ar5 noise ir14, ir62
+ xtratim 0.1
+kr21 = birnd(ir11)
+kr22 = rnd(ir14)
+ar6 noise ir14, ir62
+ xtratim 0.1
+kr23 = birnd(ir11)
+arl0 init 0.0
+arl1 init 0.0
+ar7, ar8 subinstr 23
+ar9 = (9.0 * ar7)
+ar7 = (ar9 / 20.0)
+ar9 tablei ar7, 6, 1.0, 0.5
+ar7 = (0.9 * ar9)
+ar10 = (9.0 * ar8)
+ar8 = (ar10 / 20.0)
+ar10 tablei ar8, 6, 1.0, 0.5
+ir99 = 0.6
+ir100 = 12000.0
+ar8, ar11 reverbsc ar9, ar10, ir99, ir100
+ar12 = (ar9 + ar8)
+ar8 = (0.1 * ar12)
+ar9 = (ar7 + ar8)
+ar7, ar8 subinstr 29
+ir108 = 0.14285714285714285
+ir109 = 2.0
+kr24 lpshold ir108, ir28, 0.0, ir14, ir14, ir28, ir14, ir28, ir14, ir14, ir14, ir28, ir14, ir14, ir14, ir109, ir14
+ir111 = 1.0e-3
+kr25 portk kr24, ir111
+kr24 = (0.25 * kr25)
+ir114 = 6.25e-2
+ir115 = 0.5
+ir116 = 0.25
+kr25 lpshold ir114, ir28, 0.0, ir14, ir14, ir115, ir14, ir116, ir14, ir14, ir14
+kr26 portk kr25, ir111
+kr25 = (0.25 * kr26)
+ar12 AnalogDelay ar7, kr24, kr25, ir115, ir115
+ar7 AnalogDelay ar8, kr24, kr25, ir115, ir115
+ar8, ar13 bbcuts ar12, ar7, 4.0, 8.0, 4.0, 1.0, 2.0
+ar7 oscil3 ir14, ir116, 4
+ar12 = (500.0 * ar7)
+ar14 = (2500.0 + ar12)
+ir128 = 0.1
+ar12 oscil3 ir14, ir128, 4
+ar15 = (0.5 * ar12)
+ar12 = (0.5 + ar15)
+ar15 = (0.25 * ar12)
+ar12 = (0.1 + ar15)
+ar15 moogvcf ar8, ar14, ar12
+ar8 = (0.85 * ar15)
+ar16 moogvcf ar13, ar14, ar12
+ar12, ar13 reverbsc ar15, ar16, ir99, ir100
+ar14 = (ar15 + ar12)
+ar12 = (0.15 * ar14)
+ar14 = (ar8 + ar12)
+ar8 = (8.0 * ar14)
+ar12 = (ar9 + ar8)
+ar8, ar9 subinstr 35
+ir147 = 4.0
+kr24 lpshold ir128, ir28, 0.0, ir14, ir14, ir28, ir14, ir28, ir14, ir14, ir14, ir28, ir14, ir147, ir14, ir14, ir14, ir28, ir14, ir14, ir14, ir109, ir14
+kr25 portk kr24, ir111
+kr24 = (0.25 * kr25)
+kr25 = (0.5 * kr26)
+ar14 AnalogDelay ar8, kr24, kr25, ir115, ir115
+ar8 AnalogDelay ar9, kr24, kr25, ir115, ir115
+ar9, ar15 bbcuts ar14, ar8, 4.0, 8.0, 4.0, 1.0, 2.0
+ir157 = 0.15
+ar8 oscil3 ir14, ir157, 4
+ar14 = (1000.0 * ar8)
+ar8 = (4500.0 + ar14)
+ar14 moogvcf ar9, ar8, ir128
+ar9 moogvcf ar15, ar8, ir128
+ar8 = (ar14 + ar9)
+ar9 = (ar8 / 2.0)
+ar8 oscil3 ir14, ir14, 4
+ar14 = (0.5 * ar8)
+ar8 = (0.5 + ar14)
+ar14 = (0.6 * ar8)
+ar8 = (0.2 + ar14)
+ar14, ar15 pan2 ar9, ar8
+ar8 = (0.85 * ar14)
+ar9, ar17 reverbsc ar14, ar15, ir27, ir100
+ar18 = (ar14 + ar9)
+ar9 = (0.15 * ar18)
+ar14 = (ar8 + ar9)
+ar8 = (8.0 * ar14)
+ar9 = (ar12 + ar8)
+ar8, ar12 subinstr 41
+ar14 = (6.5 * ar8)
+ar8 = (ar14 / 20.0)
+ar14 tablei ar8, 6, 1.0, 0.5
+ar8 = (ar9 + ar14)
+ar9, ar14 subinstr 53
+ar18 = (0.88 * ar9)
+ar19, ar20 reverbsc ar9, ar14, ir27, ir100
+ar21 = (ar9 + ar19)
+ar9 = (0.12 * ar21)
+ar19 = (ar18 + ar9)
+ir197 = 420.0
+ar9 = (0.5 * ar7)
+ar7 = (0.5 + ar9)
+ar9 = (0.23 * ar7)
+ar7 = (0.72 + ar9)
+ar9 moogvcf ar19, ir197, ar7
+ar18 = (ar8 + ar9)
+ir204 = 90.0
+ir205 = 100.0
+ar8 compress ar18, ar0, ir28, ir204, ir204, ir205, ir28, ir28, 0.0
+ar9 = (ar8 * 0.8)
+arl0 = ar9
+ar8 = (0.9 * ar10)
+ar9 = (ar10 + ar11)
+ar10 = (0.1 * ar9)
+ar9 = (ar8 + ar10)
+ar8 = (0.85 * ar16)
+ar10 = (ar16 + ar13)
+ar11 = (0.15 * ar10)
+ar10 = (ar8 + ar11)
+ar8 = (8.0 * ar10)
+ar10 = (ar9 + ar8)
+ar8 = (0.85 * ar15)
+ar9 = (ar15 + ar17)
+ar11 = (0.15 * ar9)
+ar9 = (ar8 + ar11)
+ar8 = (8.0 * ar9)
+ar9 = (ar10 + ar8)
+ar8 = (6.5 * ar12)
+ar10 = (ar8 / 20.0)
+ar8 tablei ar10, 6, 1.0, 0.5
+ar10 = (ar9 + ar8)
+ar8 = (0.88 * ar14)
+ar9 = (ar14 + ar20)
+ar11 = (0.12 * ar9)
+ar9 = (ar8 + ar11)
+ar8 moogvcf ar9, ir197, ar7
+ar7 = (ar10 + ar8)
+ar8 compress ar7, ar0, ir28, ir204, ir204, ir205, ir28, ir28, 0.0
+ar0 = (ar8 * 0.8)
+arl1 = ar0
+ar0 = arl0
+ar7 = arl1
+ outs ar0, ar7
+endin
+
+instr 53
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.125
+kr0 metro ir5
+if (kr0 == 1.0) then
+    krl0 = 18.0
+    ir11 = 52
+    ir12 = 0.0
+    ir13 = 1.0
+     event "i", ir11, ir12, ir13, ir3
+    ir16 = 52
+    ir17 = 0.875
+    ir18 = 1.0
+     event "i", ir16, ir17, ir18, ir3
+    ir21 = 52
+    ir22 = 1.125
+    ir23 = 1.0
+     event "i", ir21, ir22, ir23, ir3
+    ir26 = 52
+    ir27 = 2.625
+    ir28 = 1.0
+     event "i", ir26, ir27, ir28, ir3
+    ir31 = 52
+    ir32 = 3.5
+    ir33 = 1.0
+     event "i", ir31, ir32, ir33, ir3
+    ir36 = 52
+    ir37 = 3.75
+    ir38 = 1.0
+     event "i", ir36, ir37, ir38, ir3
+    ir41 = 52
+    ir42 = 7.25
+    ir43 = 1.0
+     event "i", ir41, ir42, ir43, ir3
+    ir46 = 52
+    ir47 = 7.75
+    ir48 = 1.0
+     event "i", ir46, ir47, ir48, ir3
+    ir51 = 52
+    ir52 = 7.875
+    ir53 = 1.0
+     event "i", ir51, ir52, ir53, ir3
+endif
+S58 sprintf "p1_%d", ir3
+ar0 chnget S58
+S61 sprintf "p2_%d", ir3
+ar1 chnget S61
+ chnclear S58
+ chnclear S61
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S84 sprintf "alive_%d", ir3
+ chnset kr0, S84
+endin
+
+instr 52
+arl0 init 0.0
+ar0, ar1 subinstr 51
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 51
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 50
+    ir13 = 1.0
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 50
+arl0 init 0.0
+ar0, ar1 subinstr 49
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 49
+krl0 init 10.0
+ir3 FreePort 
+krl1 init 0.0
+ir7 = 1.0
+kr0 metro ir7
+if (kr0 == 1.0) then
+    kr0 = krl1
+    ir13 = 0.0
+    ar0 random ir13, ir7
+    krl0 = 2.0
+    ir18 = 48
+    ir19 = 0.0
+    ir20 = 0.0
+    kr1 random ir20, ir7
+    ir22 = 0.0
+    kr2 random ir22, ir7
+    ir24 = 0.0
+    kr3 random ir24, ir7
+    if (kr3 < 1.0) then
+    kr4 = 0.125
+else
+    kr4 = 0.125
+endif
+    if (kr2 < 0.75) then
+    kr3 = 0.125
+else
+    kr3 = kr4
+endif
+    if (kr1 < 0.5) then
+    kr2 = 0.125
+else
+    kr2 = kr3
+endif
+    kr1 = (kr2 * 1.0)
+    ir30 = 0.0
+    kr2 random ir30, ir7
+    ir32 = 0.0
+    kr3 random ir32, ir7
+    ir34 = 0.0
+    kr4 random ir34, ir7
+    if (kr4 < 1.0) then
+    kr5 = 2.0
+else
+    kr5 = 2.0
+endif
+    if (kr3 < 0.75) then
+    kr4 = 1.0
+else
+    kr4 = kr5
+endif
+    if (kr2 < 0.5) then
+    kr3 = 0.0
+else
+    kr3 = kr4
+endif
+     event "i", ir18, ir19, kr1, kr3, ir3
+    kr1 = krl1
+    krl1 = kr1
+endif
+S46 sprintf "p1_%d", ir3
+ar1 chnget S46
+S49 sprintf "p2_%d", ir3
+ar2 chnget S49
+ chnclear S46
+ chnclear S49
+arl2 init 0.0
+arl3 init 0.0
+arl2 = ar1
+arl3 = ar2
+ar1 = arl2
+ar2 = arl3
+ outs ar1, ar2
+kr1 = krl0
+S72 sprintf "alive_%d", ir3
+ chnset kr1, S72
+endin
+
+instr 48
+arl0 init 0.0
+ar0, ar1 subinstr 43
+ar2 = (ar0 + ar1)
+ar0 = (ar2 / 2.0)
+ir8 = 0.35
+ar1, ar2 pan2 ar0, ir8
+ar0, ar3 subinstr 45
+ar4 = (ar0 + ar3)
+ar0 = (ar4 / 2.0)
+ir16 = 0.65
+ar3, ar4 pan2 ar0, ir16
+ar0, ar5 subinstr 47
+ar6 = (ar0 + ar5)
+ar0 = (ar6 / 2.0)
+ar5, ar6 pan2 ar0, ir16
+if (2.0 == p4) then
+    ar0 = ar5
+else
+    ar0 = ar1
+endif
+if (1.0 == p4) then
+    ar5 = ar3
+else
+    ar5 = ar0
+endif
+if (0.0 == p4) then
+    ar0 = ar1
+else
+    ar0 = ar5
+endif
+arl0 = ar0
+ar0 = arl0
+S33 sprintf "p1_%d", p5
+ chnmix ar0, S33
+arl1 init 0.0
+if (2.0 == p4) then
+    ar0 = ar6
+else
+    ar0 = ar2
+endif
+if (1.0 == p4) then
+    ar1 = ar4
+else
+    ar1 = ar0
+endif
+if (0.0 == p4) then
+    ar0 = ar2
+else
+    ar0 = ar1
+endif
+arl1 = ar0
+ar0 = arl1
+S48 sprintf "p2_%d", p5
+ chnmix ar0, S48
+S51 sprintf "alive_%d", p5
+kr0 chnget S51
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S51
+endin
+
+instr 47
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 46
+    ir13 = 0.125
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 46
+arl0 init 0.0
+kr0 transeg 1.0, 0.48, -10.0, 1.0e-3, 1.0, 0.0, 1.0e-3
+ar0 upsamp kr0
+ar1 = (-ar0)
+ir5 = 1.0
+ir6 = 0.0
+ir7 = octave(ir6)
+kr0 = (90.0 * ir7)
+ar0 upsamp kr0
+ir9 = (90.0 * ir7)
+ir10 = (0.125 / ir9)
+ar2 expsega 5.0, ir10, 1.0, 1.0, 1.0
+ar3 = (ar0 * ar2)
+ir13 = rnd(ir5)
+ar0 oscil3 ir5, ar3, 4, ir13
+ar2 = (ar1 * ar0)
+kr0 transeg 1.0, 0.48, -6.0, 1.0e-3, 1.0, 0.0, 1.0e-3
+ar0 upsamp kr0
+ir17 = 0.4
+ar1 noise ir5, ir17
+kr0 = octave(ir6)
+kr1 = (40.0 * kr0)
+ir21 = 800.0
+ar3 reson ar1, kr1, ir21, 1.0
+kr1 = (100.0 * kr0)
+ar1 buthp ar3, kr1
+kr1 = (600.0 * kr0)
+ar3 butlp ar1, kr1
+ar1 = (ar0 * ar3)
+ar0 = (ar2 + ar1)
+ir29 = 9.0e-2
+kr0 = birnd(ir29)
+ar1 upsamp kr0
+ar2 = (1.0 + ar1)
+ar1 = (ar0 * ar2)
+arl0 = ar1
+ar0 = arl0
+S37 sprintf "p1_%d", p4
+ chnmix ar0, S37
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S46 sprintf "p2_%d", p4
+ chnmix ar0, S46
+S49 sprintf "alive_%d", p4
+kr0 chnget S49
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S49
+endin
+
+instr 45
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 44
+    ir13 = 0.125
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 44
+arl0 init 0.0
+kr0 transeg 1.0, 0.48, -10.0, 1.0e-3, 1.0, 0.0, 1.0e-3
+ar0 upsamp kr0
+ar1 = (-ar0)
+ir5 = 1.0
+ir6 = 0.0
+ir7 = octave(ir6)
+kr0 = (133.0 * ir7)
+ar0 upsamp kr0
+ir9 = (133.0 * ir7)
+ir10 = (0.125 / ir9)
+ar2 expsega 5.0, ir10, 1.0, 1.0, 1.0
+ar3 = (ar0 * ar2)
+ir13 = rnd(ir5)
+ar0 oscil3 ir5, ar3, 4, ir13
+ar2 = (ar1 * ar0)
+kr0 transeg 1.0, 0.48, -6.0, 1.0e-3, 1.0, 0.0, 1.0e-3
+ar0 upsamp kr0
+ir17 = 0.4
+ar1 noise ir5, ir17
+kr0 = octave(ir6)
+kr1 = (400.0 * kr0)
+ir21 = 800.0
+ar3 reson ar1, kr1, ir21, 1.0
+kr1 = (100.0 * kr0)
+ar1 buthp ar3, kr1
+kr1 = (600.0 * kr0)
+ar3 butlp ar1, kr1
+ar1 = (ar0 * ar3)
+ar0 = (ar2 + ar1)
+ir29 = 9.0e-2
+kr0 = birnd(ir29)
+ar1 upsamp kr0
+ar2 = (1.0 + ar1)
+ar1 = (ar0 * ar2)
+arl0 = ar1
+ar0 = arl0
+S37 sprintf "p1_%d", p4
+ chnmix ar0, S37
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S46 sprintf "p2_%d", p4
+ chnmix ar0, S46
+S49 sprintf "alive_%d", p4
+kr0 chnget S49
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S49
+endin
+
+instr 43
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 42
+    ir13 = 0.125
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 42
+arl0 init 0.0
+kr0 transeg 1.0, 0.48, -10.0, 1.0e-3, 1.0, 0.0, 1.0e-3
+ar0 upsamp kr0
+ar1 = (-ar0)
+ir5 = 1.0
+ir6 = 0.0
+ir7 = octave(ir6)
+kr0 = (133.0 * ir7)
+ar0 upsamp kr0
+ir9 = (133.0 * ir7)
+ir10 = (0.125 / ir9)
+ar2 expsega 5.0, ir10, 1.0, 1.0, 1.0
+ar3 = (ar0 * ar2)
+ir13 = rnd(ir5)
+ar0 oscil3 ir5, ar3, 4, ir13
+ar2 = (ar1 * ar0)
+kr0 transeg 1.0, 0.48, -6.0, 1.0e-3, 1.0, 0.0, 1.0e-3
+ar0 upsamp kr0
+ir17 = 0.4
+ar1 noise ir5, ir17
+kr0 = octave(ir6)
+kr1 = (400.0 * kr0)
+ir21 = 800.0
+ar3 reson ar1, kr1, ir21, 1.0
+kr1 = (100.0 * kr0)
+ar1 buthp ar3, kr1
+kr1 = (600.0 * kr0)
+ar3 butlp ar1, kr1
+ar1 = (ar0 * ar3)
+ar0 = (ar2 + ar1)
+ir29 = 9.0e-2
+kr0 = birnd(ir29)
+ar1 upsamp kr0
+ar2 = (1.0 + ar1)
+ar1 = (ar0 * ar2)
+arl0 = ar1
+ar0 = arl0
+S37 sprintf "p1_%d", p4
+ chnmix ar0, S37
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S46 sprintf "p2_%d", p4
+ chnmix ar0, S46
+S49 sprintf "alive_%d", p4
+kr0 chnget S49
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S49
+endin
+
+instr 41
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 40
+    ir13 = 0.5
+    ir14 = 604800.0
+     event "i", ir12, ir13, ir14, ir3
+endif
+S19 sprintf "p1_%d", ir3
+ar0 chnget S19
+S22 sprintf "p2_%d", ir3
+ar1 chnget S22
+ chnclear S19
+ chnclear S22
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S45 sprintf "alive_%d", ir3
+ chnset kr0, S45
+endin
+
+instr 40
+arl0 init 0.0
+ar0, ar1 subinstr 39
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 39
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.5
+kr0 metro ir5
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir11 = 38
+    ir12 = 0.0
+    ir13 = 0.125
+     event "i", ir11, ir12, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 38
+arl0 init 0.0
+ar0, ar1 subinstr 37
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 37
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 36
+    ir13 = 0.125
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 36
+arl0 init 0.0
+ir3 = 8.5e-2
+ir4 = birnd(ir3)
+ir5 = (ir4 * 0.8)
+ir6 = (0.8 + ir5)
+ir7 = (ir6 * 0.1)
+ir8 = (ir6 * 0.3)
+kr0 expsegr 1.0, ir7, 1.0e-4, 1.0, 1.0e-4, ir8, 1.0e-4
+ar0 upsamp kr0
+ar1 = (0.75 * ar0)
+ir11 = 1.0
+ir12 = 8.5e-3
+kr0 = birnd(ir12)
+kr1 = (kr0 * 342.0)
+kr0 = (342.0 + kr1)
+ar0 upsamp kr0
+ir16 = rnd(ir11)
+ar2 oscil3 ir11, kr0, 4, ir16
+ar3 = (0.5 * ar0)
+ir19 = rnd(ir11)
+ar0 oscil3 ir11, ar3, 4, ir19
+ar3 = (ar2 + ar0)
+ar0 = (ar1 * ar3)
+ar1 expon 1.0, ir8, 5.0e-4
+ir24 = 0.75
+ir25 = 0.0
+ar2 noise ir24, ir25
+kr0 = birnd(ir3)
+kr1 = (kr0 * 0.7)
+kr0 = octave(kr1)
+kr1 = (10000.0 * kr0)
+ir31 = 10000.0
+ar3 butbp ar2, kr1, ir31
+ir33 = 1000.0
+ar2 buthp ar3, ir33
+kr0 expsegr 5000.0, 0.1, 3000.0, 1.0, 3000.0, ir8, 1.0e-4
+ar3 butlp ar2, kr0
+ar2 = (ar1 * ar3)
+ar1 = (ar0 + ar2)
+ir39 = 9.0e-2
+kr0 = birnd(ir39)
+ar0 upsamp kr0
+ar2 = (1.0 + ar0)
+ar0 = (ar1 * ar2)
+arl0 = ar0
+ar1 = arl0
+S47 sprintf "p1_%d", p4
+ chnmix ar1, S47
+arl1 init 0.0
+arl1 = ar0
+ar0 = arl1
+S56 sprintf "p2_%d", p4
+ chnmix ar0, S56
+S59 sprintf "alive_%d", p4
+kr0 chnget S59
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S59
+endin
+
+instr 35
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.12121212121212122
+kr0 metro ir5
+if (kr0 == 1.0) then
+    krl0 = 30.0
+    ir11 = 34
+    ir12 = 0.0
+    ir13 = 1.0
+    ir14 = 1.0
+     event "i", ir11, ir12, ir13, ir14, ir3
+    ir17 = 34
+    ir18 = 0.875
+    ir19 = 1.0
+    ir20 = 0.5
+     event "i", ir17, ir18, ir19, ir20, ir3
+    ir23 = 34
+    ir24 = 1.25
+    ir25 = 1.0
+    ir26 = 0.25
+     event "i", ir23, ir24, ir25, ir26, ir3
+    ir29 = 34
+    ir30 = 1.375
+    ir31 = 1.0
+    ir32 = 1.0
+     event "i", ir29, ir30, ir31, ir32, ir3
+    ir35 = 34
+    ir36 = 1.5
+    ir37 = 1.0
+    ir38 = 0.5
+     event "i", ir35, ir36, ir37, ir38, ir3
+    ir41 = 34
+    ir42 = 2.75
+    ir43 = 1.0
+    ir44 = 0.25
+     event "i", ir41, ir42, ir43, ir44, ir3
+    ir47 = 34
+    ir48 = 3.625
+    ir49 = 1.0
+    ir50 = 1.0
+     event "i", ir47, ir48, ir49, ir50, ir3
+    ir53 = 34
+    ir54 = 4.0
+    ir55 = 1.0
+    ir56 = 0.5
+     event "i", ir53, ir54, ir55, ir56, ir3
+    ir59 = 34
+    ir60 = 4.125
+    ir61 = 1.0
+    ir62 = 0.25
+     event "i", ir59, ir60, ir61, ir62, ir3
+    ir65 = 34
+    ir66 = 4.25
+    ir67 = 1.0
+    ir68 = 1.0
+     event "i", ir65, ir66, ir67, ir68, ir3
+    ir71 = 34
+    ir72 = 5.5
+    ir73 = 1.0
+    ir74 = 0.5
+     event "i", ir71, ir72, ir73, ir74, ir3
+    ir77 = 34
+    ir78 = 6.375
+    ir79 = 1.0
+    ir80 = 0.25
+     event "i", ir77, ir78, ir79, ir80, ir3
+    ir83 = 34
+    ir84 = 6.75
+    ir85 = 1.0
+    ir86 = 1.0
+     event "i", ir83, ir84, ir85, ir86, ir3
+    ir89 = 34
+    ir90 = 6.875
+    ir91 = 1.0
+    ir92 = 0.5
+     event "i", ir89, ir90, ir91, ir92, ir3
+    ir95 = 34
+    ir96 = 7.0
+    ir97 = 1.0
+    ir98 = 0.25
+     event "i", ir95, ir96, ir97, ir98, ir3
+endif
+S103 sprintf "p1_%d", ir3
+ar0 chnget S103
+S106 sprintf "p2_%d", ir3
+ar1 chnget S106
+ chnclear S103
+ chnclear S106
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S129 sprintf "alive_%d", ir3
+ chnset kr0, S129
+endin
+
+instr 34
+arl0 init 0.0
+arl1 init 0.0
+ir5 = 0.0
+ir6 = 1.0
+ir7 random ir5, ir6
+if (ir7 < 0.6) then
+    ar0, ar1 subinstr 33
+    arl0 = ar0
+    ar0, ar2 subinstr 33
+    arl1 = ar2
+endif
+if (ir7 >= 0.6) then
+    arl0 = 0.0
+    arl1 = 0.0
+endif
+ar2 = arl0
+ar3 = arl1
+arl2 init 0.0
+ar4 = (p4 * ar2)
+arl2 = ar4
+ar2 = arl2
+S40 sprintf "p1_%d", p5
+ chnmix ar2, S40
+arl3 init 0.0
+ar2 = (p4 * ar3)
+arl3 = ar2
+ar2 = arl3
+S50 sprintf "p2_%d", p5
+ chnmix ar2, S50
+S53 sprintf "alive_%d", p5
+kr0 chnget S53
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S53
+endin
+
+instr 33
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 32
+    ir13 = 1.0
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 32
+arl0 init 0.0
+ar0, ar1 subinstr 31
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 31
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 30
+    ir13 = 0.125
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 30
+arl0 init 0.0
+ar0 expsega 0.4, 1.1200000000000002e-2, 1.0, 8.0e-3, 5.0e-2, 4.000000000000001e-2, 1.0e-3, 1.0, 1.0e-3
+ir4 = 0.75
+ir5 = 0.0
+ar1 noise ir4, ir5
+kr0 = octave(ir5)
+kr1 = (6000.0 * kr0)
+ir9 = 20.0
+kr2 = (sr / 2.0)
+kr3 limit kr1, ir9, kr2
+ar2 buthp ar1, kr3
+kr1 = (12000.0 * kr0)
+kr0 = (sr / 3.0)
+kr2 limit kr1, ir9, kr0
+ar1 butlp ar2, kr2
+ar2 = (ar0 * ar1)
+ir18 = 9.0e-2
+kr0 = birnd(ir18)
+ar0 upsamp kr0
+ar1 = (1.0 + ar0)
+ar0 = (ar2 * ar1)
+arl0 = ar0
+ar1 = arl0
+S26 sprintf "p1_%d", p4
+ chnmix ar1, S26
+arl1 init 0.0
+arl1 = ar0
+ar0 = arl1
+S35 sprintf "p2_%d", p4
+ chnmix ar0, S35
+S38 sprintf "alive_%d", p4
+kr0 chnget S38
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S38
+endin
+
+instr 29
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.25
+kr0 metro ir5
+if (kr0 == 1.0) then
+    krl0 = 18.0
+    ir11 = 28
+    ir12 = 0.0
+    ir13 = 1.0
+     event "i", ir11, ir12, ir5, ir13, ir3
+    ir16 = 28
+    ir17 = 0.375
+    ir18 = 0.5
+     event "i", ir16, ir17, ir5, ir18, ir3
+    ir21 = 28
+    ir22 = 0.75
+     event "i", ir21, ir22, ir5, ir5, ir3
+    ir25 = 28
+    ir26 = 1.0
+    ir27 = 1.0
+     event "i", ir25, ir26, ir5, ir27, ir3
+    ir30 = 28
+    ir31 = 1.375
+    ir32 = 0.5
+     event "i", ir30, ir31, ir5, ir32, ir3
+    ir35 = 28
+    ir36 = 1.75
+     event "i", ir35, ir36, ir5, ir5, ir3
+    ir39 = 28
+    ir40 = 2.0
+    ir41 = 1.0
+     event "i", ir39, ir40, ir5, ir41, ir3
+    ir44 = 28
+    ir45 = 2.375
+    ir46 = 0.5
+     event "i", ir44, ir45, ir5, ir46, ir3
+    ir49 = 28
+    ir50 = 2.75
+     event "i", ir49, ir50, ir5, ir5, ir3
+endif
+S55 sprintf "p1_%d", ir3
+ar0 chnget S55
+S58 sprintf "p2_%d", ir3
+ar1 chnget S58
+ chnclear S55
+ chnclear S58
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S81 sprintf "alive_%d", ir3
+ chnset kr0, S81
+endin
+
+instr 28
+arl0 init 0.0
+arl1 init 0.0
+ir5 = 0.0
+ir6 = 1.0
+ir7 random ir5, ir6
+if (ir7 < 0.8) then
+    ar0, ar1 subinstr 27
+    arl0 = ar0
+    ar0, ar2 subinstr 27
+    arl1 = ar2
+endif
+if (ir7 >= 0.8) then
+    arl0 = 0.0
+    arl1 = 0.0
+endif
+ar2 = arl0
+ar3 = arl1
+arl2 init 0.0
+ar4 = (p4 * ar2)
+arl2 = ar4
+ar2 = arl2
+S40 sprintf "p1_%d", p5
+ chnmix ar2, S40
+arl3 init 0.0
+ar2 = (p4 * ar3)
+arl3 = ar2
+ar2 = arl3
+S50 sprintf "p2_%d", p5
+ chnmix ar2, S50
+S53 sprintf "alive_%d", p5
+kr0 chnget S53
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S53
+endin
+
+instr 27
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 26
+    ir13 = 0.25
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 26
+arl0 init 0.0
+ar0, ar1 subinstr 25
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 25
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 24
+    ir13 = 0.125
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 24
+arl0 init 0.0
+ar0 expsega 1.0, 0.4, 1.0e-3, 1.0, 1.0e-3
+ir4 = 1.0
+ir5 = 0.0
+kr0 = octave(ir5)
+kr1 = (296.0 * kr0)
+kr0 = (1.0 * kr1)
+kr2 = rnd(ir4)
+ar1 vco2 ir4, kr0, 2.0, 0.25, kr2
+kr0 = (0.962 * kr1)
+kr2 = rnd(ir4)
+ar2 vco2 ir4, kr0, 2.0, 0.25, kr2
+ar3 = (ar1 + ar2)
+kr0 = (1.233 * kr1)
+kr2 = rnd(ir4)
+ar1 vco2 ir4, kr0, 2.0, 0.25, kr2
+ar2 = (ar3 + ar1)
+kr0 = (1.175 * kr1)
+kr2 = rnd(ir4)
+ar1 vco2 ir4, kr0, 2.0, 0.25, kr2
+ar3 = (ar2 + ar1)
+kr0 = (1.419 * kr1)
+kr2 = rnd(ir4)
+ar1 vco2 ir4, kr0, 2.0, 0.25, kr2
+ar2 = (ar3 + ar1)
+kr0 = (2.821 * kr1)
+kr1 = rnd(ir4)
+ar1 vco2 ir4, kr0, 2.0, 0.25, kr1
+ar3 = (ar2 + ar1)
+ar1 = (0.5 * ar3)
+ir32 = 0.0
+kr0 = octave(ir32)
+kr1 = (5000.0 * kr0)
+ir35 = 5000.0
+ar2 reson ar1, kr1, ir35, 1.0
+ar1 buthp ar2, ir35
+ar2 buthp ar1, ir35
+ar1 = (ar0 * ar2)
+ir40 = 0.8
+ar2 noise ir40, ir5
+kr0 expseg 20000.0, 0.7, 9000.0, 0.30000000000000004, 9000.0, 1.0, 9000.0
+ar3 butlp ar2, kr0
+ir44 = 8000.0
+ar2 buthp ar3, ir44
+ar3 = (ar0 * ar2)
+ar0 = (ar1 + ar3)
+ir48 = 9.0e-2
+kr0 = birnd(ir48)
+ar1 upsamp kr0
+ar2 = (1.0 + ar1)
+ar1 = (ar0 * ar2)
+arl0 = ar1
+ar0 = arl0
+S56 sprintf "p1_%d", p4
+ chnmix ar0, S56
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S65 sprintf "p2_%d", p4
+ chnmix ar0, S65
+S68 sprintf "alive_%d", p4
+kr0 chnget S68
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S68
+endin
+
+instr 23
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.125
+kr0 metro ir5
+if (kr0 == 1.0) then
+    krl0 = 30.0
+    ir11 = 22
+    ir12 = 0.0
+    ir13 = 2.0
+     event "i", ir11, ir12, ir13, ir3
+    ir16 = 22
+    ir17 = 0.75
+    ir18 = 2.0
+     event "i", ir16, ir17, ir18, ir3
+    ir21 = 22
+    ir22 = 1.5
+    ir23 = 2.0
+     event "i", ir21, ir22, ir23, ir3
+    ir26 = 22
+    ir27 = 2.0
+    ir28 = 2.0
+     event "i", ir26, ir27, ir28, ir3
+    ir31 = 22
+    ir32 = 3.0
+    ir33 = 2.0
+     event "i", ir31, ir32, ir33, ir3
+    ir36 = 22
+    ir37 = 3.25
+    ir38 = 2.0
+     event "i", ir36, ir37, ir38, ir3
+    ir41 = 22
+    ir42 = 3.75
+    ir43 = 2.0
+     event "i", ir41, ir42, ir43, ir3
+    ir46 = 22
+    ir47 = 4.0
+    ir48 = 2.0
+     event "i", ir46, ir47, ir48, ir3
+    ir51 = 22
+    ir52 = 4.75
+    ir53 = 2.0
+     event "i", ir51, ir52, ir53, ir3
+    ir56 = 22
+    ir57 = 5.5
+    ir58 = 2.0
+     event "i", ir56, ir57, ir58, ir3
+    ir61 = 22
+    ir62 = 5.875
+    ir63 = 2.0
+     event "i", ir61, ir62, ir63, ir3
+    ir66 = 22
+    ir67 = 6.0
+    ir68 = 2.0
+     event "i", ir66, ir67, ir68, ir3
+    ir71 = 22
+    ir72 = 7.0
+    ir73 = 2.0
+     event "i", ir71, ir72, ir73, ir3
+    ir76 = 22
+    ir77 = 7.25
+    ir78 = 2.0
+     event "i", ir76, ir77, ir78, ir3
+    ir81 = 22
+    ir82 = 7.875
+    ir83 = 2.0
+     event "i", ir81, ir82, ir83, ir3
+endif
+S88 sprintf "p1_%d", ir3
+ar0 chnget S88
+S91 sprintf "p2_%d", ir3
+ar1 chnget S91
+ chnclear S88
+ chnclear S91
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S114 sprintf "alive_%d", ir3
+ chnset kr0, S114
+endin
+
+instr 22
+arl0 init 0.0
+arl1 init 0.0
+ir5 = 0.0
+ir6 = 1.0
+ir7 random ir5, ir6
+if (ir7 < 0.85) then
+    ar0, ar1 subinstr 21
+    arl0 = ar0
+    ar0, ar2 subinstr 21
+    arl1 = ar2
+endif
+if (ir7 >= 0.85) then
+    arl0 = 0.0
+    arl1 = 0.0
+endif
+ar2 = arl0
+ar3 = arl1
+arl2 init 0.0
+arl2 = ar2
+ar2 = arl2
+S39 sprintf "p1_%d", p4
+ chnmix ar2, S39
+arl3 init 0.0
+arl3 = ar3
+ar2 = arl3
+S48 sprintf "p2_%d", p4
+ chnmix ar2, S48
+S51 sprintf "alive_%d", p4
+kr0 chnget S51
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S51
+endin
+
+instr 21
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 20
+    ir13 = 2.0
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 20
+arl0 init 0.0
+ar0, ar1 subinstr 19
+arl0 = ar0
+ar0 = arl0
+S9 sprintf "p1_%d", p4
+ chnmix ar0, S9
+arl1 init 0.0
+arl1 = ar1
+ar0 = arl1
+S19 sprintf "p2_%d", p4
+ chnmix ar0, S19
+S22 sprintf "alive_%d", p4
+kr0 chnget S22
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S22
+endin
+
+instr 19
+krl0 init 10.0
+ir3 FreePort 
+ir5 = 0.0
+ar0 mpulse k(ksmps), ir5, 0.0
+kr0 downsamp ar0, ksmps
+if (kr0 == 1.0) then
+    krl0 = 2.0
+    ir12 = 18
+    ir13 = 0.25
+     event "i", ir12, ir5, ir13, ir3
+endif
+S18 sprintf "p1_%d", ir3
+ar0 chnget S18
+S21 sprintf "p2_%d", ir3
+ar1 chnget S21
+ chnclear S18
+ chnclear S21
+arl1 init 0.0
+arl2 init 0.0
+arl1 = ar0
+arl2 = ar1
+ar0 = arl1
+ar1 = arl2
+ outs ar0, ar1
+kr0 = krl0
+S44 sprintf "alive_%d", ir3
+ chnset kr0, S44
+endin
+
+instr 18
+arl0 init 0.0
+ir3 = 0.5
+ir4 = 5.0e-3
+ir5 = birnd(ir4)
+ir6 = (ir5 * 55.0)
+kr0 = (55.0 + ir6)
+ar0 upsamp kr0
+ir8 = 5.0e-2
+ir9 = birnd(ir8)
+ir10 = (ir9 * 0.95)
+ir11 = (0.95 + ir10)
+kr0 transegr 0.5, 1.2, -4.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, ir11, 0.0, 0.0
+ar1 upsamp kr0
+ar2 = semitone(ar1)
+ar1 = (ar0 * ar2)
+ir15 = 20.0
+ir16 = 1.0
+ir17 = (ir11 * 0.5)
+kr0 transegr 0.2, ir17, -15.0, 1.0e-2, ir17, 0.0, 0.0, 1.0, 0.0, 0.0, ir11, 0.0, 0.0
+ar0 gbuzz ir3, ar1, ir15, ir16, kr0, 2
+ir20 = (ir11 - 4.0e-3)
+kr0 transeg 1.0, ir20, -6.0, 0.0, 1.0, 0.0, 0.0
+ar1 upsamp kr0
+ar2 = (ar0 * ar1)
+kr0 linseg 0.0, 4.0e-3, 1.0, 1.0, 1.0
+ar0 upsamp kr0
+ar1 = (ar2 * ar0)
+ar0 = (ar1 * 0.7)
+kr0 linseg 1.0, 7.0e-2, 0.0, 1.0, 0.0
+ir27 = (55.0 + ir6)
+ir28 = (8.0 * ir27)
+ar1 expsega ir28, 7.0e-2, 1.0e-3, 1.0, 1.0e-3
+ar2 oscili kr0, ar1, 4
+ar1 = (ar2 * 0.25)
+ar2 = (ar0 + ar1)
+ir33 = 9.0e-2
+kr0 = birnd(ir33)
+ar0 upsamp kr0
+ar1 = (1.0 + ar0)
+ar0 = (ar2 * ar1)
+arl0 = ar0
+ar1 = arl0
+S41 sprintf "p1_%d", p4
+ chnmix ar1, S41
+arl1 init 0.0
+arl1 = ar0
+ar0 = arl1
+S50 sprintf "p2_%d", p4
+ chnmix ar0, S50
+S53 sprintf "alive_%d", p4
+kr0 chnget S53
+if (kr0 < -10.0) then
+     turnoff 
+endif
+kr1 = (kr0 - 1.0)
+ chnset kr1, S53
+endin
+
+</CsInstruments>
+
+<CsScore>
+
+f6 0 2048 8  -0.9981778976111987 146.0 -0.9950547536867305 146.0 -0.9866142981514303 146.0 -0.9640275800758169 146.0 -0.9051482536448664 146.0 -0.7615941559557649 146.0 -0.46211715726000974 146.0 0.0 146.0 0.46211715726000974 146.0 0.7615941559557649 146.0 0.9051482536448664 146.0 0.9640275800758169 146.0 0.9866142981514303 146.0 0.9950547536867305 146.0 0.9981778976111987
+f4 0 8192 10  1.0
+f2 0 8192 11  1.0
+
+f0 604800.0
+
+i 57 0.0 -1.0 
+i 56 0.0 -1.0 
+i 54 0.0 -1.0 
+
+</CsScore>
+
+
+
+
+</CsoundSynthesizer>
