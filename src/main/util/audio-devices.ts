@@ -1,5 +1,17 @@
 import { execFile } from 'child_process'
 import { withCsoundPath } from './csound-path'
+import { getCsoundEnvironment } from './csound-version'
+
+// Csound 7 on macOS defaults to auhal; device indices from portaudio --devices
+// do NOT match -odacN under auhal (silent/wrong output). Use one module everywhere.
+export function realtimeAudioModule(): string {
+  if (process.platform === 'darwin' && getCsoundEnvironment().major === 7) return 'auhal'
+  return 'portaudio'
+}
+
+export function realtimeAudioFlag(): string {
+  return `-+rtaudio=${realtimeAudioModule()}`
+}
 
 // Enumerate the audio + MIDI devices csound can see, by parsing `csound --devices`.
 // The indices csound prints here are exactly what the `-odacN` / `-iadcN` / `-MN`
@@ -19,11 +31,17 @@ export interface DeviceList {
   midiInputs: AudioDevice[]
 }
 
-function run(args: string[]): Promise<string> {
+function runAudio(args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('csound', [realtimeAudioFlag(), ...args], { timeout: 8000, env: withCsoundPath() }, (_err, stdout, stderr) => {
+      resolve(`${stdout}\n${stderr}`)
+    })
+  })
+}
+
+function runRaw(args: string[]): Promise<string> {
   return new Promise((resolve) => {
     execFile('csound', args, { timeout: 8000, env: withCsoundPath() }, (_err, stdout, stderr) => {
-      // csound prints the device list to stderr and exits non-zero on the bare
-      // --devices probe; that's expected, so we ignore the error and read stderr.
       resolve(`${stdout}\n${stderr}`)
     })
   })
@@ -49,8 +67,8 @@ function parseDeviceLine(line: string): AudioDevice | null {
 }
 
 export async function listAudioDevices(): Promise<DeviceList> {
-  const audioRaw = stripAnsi(await run(['-+rtaudio=portaudio', '--devices']))
-  const midiRaw = stripAnsi(await run(['-+rtmidi=portmidi', '--midi-devices']))
+  const audioRaw = stripAnsi(await runAudio(['--devices']))
+  const midiRaw = stripAnsi(await runRaw(['-+rtmidi=portmidi', '--midi-devices']))
 
   const outputs: AudioDevice[] = []
   const inputs: AudioDevice[] = []
@@ -78,4 +96,89 @@ export async function listAudioDevices(): Promise<DeviceList> {
   }
 
   return { outputs, inputs, midiInputs }
+}
+
+/** Map Settings list index → csound `-o` token (e.g. index 0 → `dac1`, not `dac0`). */
+export function resolveDacOutputArg(indexStr: string, outputs: AudioDevice[]): string {
+  const dev = outputs.find((d) => String(d.index) === indexStr)
+  if (dev?.id && /^dac/i.test(dev.id) && dev.name.trim() && !isPoorDefaultOutput(dev)) return dev.id
+  return resolveDefaultDacOutputArg(outputs)
+}
+
+/** Map Settings list index → csound input flag (e.g. index 0 → `-iadc1`). */
+export function resolveAdcInputFlag(indexStr: string, inputs: AudioDevice[]): string {
+  const dev = inputs.find((d) => String(d.index) === indexStr)
+  if (dev?.id && /^adc/i.test(dev.id)) return `-i${dev.id}`
+  const n = parseInt(indexStr, 10)
+  return Number.isFinite(n) ? `-iadc${n + 1}` : '-iadc'
+}
+
+/** Skip virtual/loopback devices when picking a sensible default output. */
+export function isPoorDefaultOutput(dev: AudioDevice): boolean {
+  const blob = `${dev.id} ${dev.name}`.toLowerCase()
+  if (!dev.name.trim()) return true
+  return (
+    /blackhole|soundflower|loopback|vb-?audio|virtual desktop|screen recording|landr sessions|zoomaudio|aggregate|multi[- ]output/i.test(
+      blob,
+    )
+  )
+}
+
+function listDacOutputs(outputs: AudioDevice[]): AudioDevice[] {
+  return outputs.filter((d) => /^dac/i.test(d.id))
+}
+
+/**
+ * Best physical output for workshop Player — Mac speakers, then headphones/AirPods,
+ * then any non-virtual dac. Never BlackHole / Zoom / loopback.
+ */
+export function findPreferredDefaultOutput(outputs: AudioDevice[]): AudioDevice | null {
+  const dacs = listDacOutputs(outputs)
+  if (!dacs.length) return null
+
+  const tiers: Array<(d: AudioDevice) => boolean> = [
+    (d) => /macbook.*speaker|built-?in.*speaker/i.test(d.name),
+    (d) => /airpod|beats|powerbeats/i.test(d.name),
+    (d) => /headphone|speakers?/i.test(d.name),
+    (d) => /usb|hdmi|display|external/i.test(d.name),
+    () => true,
+  ]
+
+  for (const match of tiers) {
+    const dev = dacs.find((d) => match(d) && !isPoorDefaultOutput(d))
+    if (dev) return dev
+  }
+  return null
+}
+
+/** Clear stale or virtual saved indices; empty string = Auto (resolved at play time only). */
+export function resolveStoredOutputIndex(indexStr: string, outputs: AudioDevice[]): string {
+  if (!indexStr) return ''
+  if (/^\d+$/.test(indexStr)) {
+    const dev = outputs.find((d) => String(d.index) === indexStr)
+    if (dev && !isPoorDefaultOutput(dev)) return indexStr
+  }
+  return ''
+}
+
+/**
+ * When Settings output is "system default", csound's bare `-o dac` often follows macOS
+ * routing to BlackHole / Zoom. Always pick an explicit physical `dacN` when possible.
+ */
+export function resolveDefaultDacOutputArg(outputs: AudioDevice[]): string {
+  const pref = findPreferredDefaultOutput(outputs)
+  if (pref) return pref.id
+  return 'dac'
+}
+
+export function outputLabelForIndex(indexStr: string, outputs: AudioDevice[]): string {
+  if (!indexStr) return 'system default'
+  const dev = outputs.find((d) => String(d.index) === indexStr)
+  return dev ? `${dev.name} (${dev.id})` : `index ${indexStr}`
+}
+
+/** Best-effort Mac speakers index for workshop playback. */
+export function findMacSpeakersIndex(outputs: AudioDevice[]): number | null {
+  const mac = outputs.find((d) => /macbook.*speaker|built-?in.*speaker/i.test(d.name))
+  return mac?.index ?? null
 }

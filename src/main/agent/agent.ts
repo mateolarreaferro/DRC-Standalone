@@ -7,11 +7,13 @@ import csoundSinePromptText from './prompts/csound-sine.txt?raw'
 import csoundSynthesisPromptText from './prompts/csound-synthesis.txt?raw'
 import csoundEffectsPromptText from './prompts/csound-effects.txt?raw'
 import csoundModulationPromptText from './prompts/csound-modulation.txt?raw'
+import authoritativeSourcesText from './prompts/authoritative-sources.txt?raw'
+import demoScorePromptText from './prompts/demo-score.txt?raw'
 import narratorPromptText from './prompts/narrator.txt?raw'
 
 const PROMPTS: Record<string, string> = {
-  csound: csoundPromptText,
-  'csound-sine': csoundSinePromptText,
+  csound: `${csoundPromptText}\n\n${authoritativeSourcesText}\n\n${demoScorePromptText}`,
+  'csound-sine': `${csoundSinePromptText}\n\n${authoritativeSourcesText}\n\n${demoScorePromptText}`,
   'csound-synthesis': csoundSynthesisPromptText,
   'csound-effects': csoundEffectsPromptText,
   'csound-modulation': csoundModulationPromptText,

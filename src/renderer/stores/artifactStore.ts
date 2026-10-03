@@ -2,6 +2,33 @@ import { create } from 'zustand'
 
 export type ArtifactType = 'csd' | 'webapp' | 'vst'
 
+const ARTIFACT_TYPE_PRIORITY: Record<ArtifactType, number> = { webapp: 3, vst: 2, csd: 1 }
+
+/** When several artifacts share a source message (race during web-app wrap), prefer webapp. */
+export function findBySourceMessageId(artifacts: Artifact[], messageId: string): Artifact | null {
+  const matches = artifacts.filter((a) => a.sourceMessageId === messageId)
+  if (!matches.length) return null
+  return matches.sort(
+    (a, b) =>
+      ARTIFACT_TYPE_PRIORITY[b.type] - ARTIFACT_TYPE_PRIORITY[a.type] || b.timestamp - a.timestamp,
+  )[0]
+}
+
+/** True when a web app already owns this assistant message — CSD must never be re-added. */
+export function hasWebappForMessage(artifacts: Artifact[], messageId: string): boolean {
+  return artifacts.some((a) => a.sourceMessageId === messageId && a.type === 'webapp')
+}
+
+export function getWebappForMessage(artifacts: Artifact[], messageId: string): Artifact | null {
+  const matches = artifacts.filter((a) => a.sourceMessageId === messageId && a.type === 'webapp')
+  if (!matches.length) return null
+  return matches.sort((a, b) => b.timestamp - a.timestamp)[0]
+}
+
+function isOrchestraCsdContent(content: string): boolean {
+  return /<CsoundSynthesizer/i.test(content) && !/<!DOCTYPE\s+html/i.test(content)
+}
+
 export type FileLanguage = 'csd' | 'html' | 'js' | 'css' | 'cabbage'
 
 export interface ArtifactFile {
@@ -115,7 +142,10 @@ interface ArtifactState {
   activeArtifactId: string | null
   panelOpen: boolean
 
-  addArtifact: (input: { type: ArtifactType; title: string; content: string; sourceMessageId?: string }) => Artifact
+  addArtifact: (
+    input: { type: ArtifactType; title: string; content: string; sourceMessageId?: string },
+    opts?: { openPanel?: boolean },
+  ) => Artifact
   updatePrimary: (id: string, content: string, sourceMessageId?: string) => Artifact
   updateInPlace: (id: string, content: string) => void
   setActive: (id: string | null) => void
@@ -125,6 +155,7 @@ interface ArtifactState {
   togglePanel: () => void
   getVersions: (id: string) => Artifact[]
   getActive: () => Artifact | null
+  removeArtifacts: (ids: string[]) => void
   reset: () => void
 }
 
@@ -133,8 +164,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   activeArtifactId: null,
   panelOpen: false,
 
-  addArtifact: (input) => {
+  addArtifact: (input, opts) => {
     const existing = get().artifacts
+    if (input.sourceMessageId && input.type === 'csd') {
+      const locked = getWebappForMessage(existing, input.sourceMessageId)
+      if (locked) return locked
+    }
     const sameTitle = existing.filter((a) => a.title === input.title && a.type === input.type)
     const version = sameTitle.length + 1
     const parentId = sameTitle.length > 0 ? sameTitle[sameTitle.length - 1].id : undefined
@@ -150,10 +185,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       parentId,
       sourceMessageId: input.sourceMessageId,
     }
+    const openPanel = opts?.openPanel !== false
     set((s) => ({
       artifacts: [...s.artifacts, artifact],
       activeArtifactId: artifact.id,
-      panelOpen: true,
+      panelOpen: openPanel ? true : s.panelOpen,
     }))
     return artifact
   },
@@ -161,6 +197,15 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   updatePrimary: (id, newContent, sourceMessageId) => {
     const existing = get().artifacts.find((a) => a.id === id)
     if (!existing) return existing!
+    const msgId = sourceMessageId ?? existing.sourceMessageId
+    if (
+      msgId &&
+      existing.type !== 'webapp' &&
+      isOrchestraCsdContent(newContent) &&
+      getWebappForMessage(get().artifacts, msgId)
+    ) {
+      return getWebappForMessage(get().artifacts, msgId)!
+    }
 
     const artifact: Artifact = {
       ...existing,
@@ -184,6 +229,19 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   updateInPlace: (id, newContent) => set((s) => ({
     artifacts: s.artifacts.map((a) => {
       if (a.id !== id) return a
+      // Never overwrite a web app with raw orchestra CSD from message re-detection.
+      if (a.type === 'webapp' && isOrchestraCsdContent(newContent)) {
+        return a
+      }
+      // Never mutate a stale CSD sibling once a web app owns the source message.
+      if (
+        a.type === 'csd' &&
+        a.sourceMessageId &&
+        hasWebappForMessage(s.artifacts, a.sourceMessageId) &&
+        isOrchestraCsdContent(newContent)
+      ) {
+        return a
+      }
       const files = splitIntoFiles(a.type, newContent)
       const activeFileIndex = a.activeFileIndex < files.length ? a.activeFileIndex : 0
       return { ...a, files, activeFileIndex }
@@ -214,6 +272,17 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   getActive: () => {
     const { artifacts, activeArtifactId } = get()
     return artifacts.find((a) => a.id === activeArtifactId) || null
+  },
+
+  removeArtifacts: (ids) => {
+    const drop = new Set(ids)
+    if (!drop.size) return
+    set((s) => {
+      const artifacts = s.artifacts.filter((a) => !drop.has(a.id))
+      const activeArtifactId =
+        s.activeArtifactId && drop.has(s.activeArtifactId) ? null : s.activeArtifactId
+      return { artifacts, activeArtifactId }
+    })
   },
 
   // Wipe all artifact state. Called when starting a new chat so the previous

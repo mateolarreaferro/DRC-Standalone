@@ -2,24 +2,27 @@
 
 AI-powered Csound creative tool. Electron app.
 
-## Install (no terminal needed)
+**LAC 2026 workshop:** platform handouts and QR sheet → [csounder/Dr.C-Workshop-Demo](https://github.com/csounder/Dr.C-Workshop-Demo). App install and launch → **[PARTICIPANTS.md](./PARTICIPANTS.md)**. Local LLM → **[LOCAL-LLM.md](./LOCAL-LLM.md)**.
 
-1. Grab the latest installer from the
-   [Releases page](https://github.com/mateolarreaferro/DRC-Standalone/releases):
-   - **macOS** — `DrC-<version>-arm64.dmg` (Apple Silicon) or
-     `DrC-<version>-x64.dmg` (Intel). Open the DMG, drag **DrC** to Applications.
-   - **Windows** — `DrC Setup <version>.exe`. Run it.
-   - **Linux** — `DrC-<version>.AppImage`. `chmod +x` it and double-click.
-2. Install **Csound** once (the app calls the `csound` CLI):
-   - macOS: `brew install csound`
-   - Linux: `sudo apt install csound`
+## Install (LAC 2026 workshop)
+
+```bash
+git clone -b lac-2026-csound7 https://github.com/csounder/DRC-Standalone.git
+cd DRC-Standalone
+npm install
+```
+
+Pre-built installers may be added later; for LAC 2026 use **git clone** on `lac-2026-csound7`.
+
+1. Install **Csound 7** once (the app calls the `csound` CLI):
+   - macOS: install from [csound/csound releases](https://github.com/csound/csound/releases) to `~/Applications/Csound/` (not Homebrew 6.x)
+   - Linux: install Csound 7 from [GitHub releases](https://github.com/csound/csound/releases) or build from source (Ubuntu 22.04 apt ships 6.x)
    - Windows: installer at [csound.com/download](https://csound.com/download.html)
-3. Launch **DrC**, open **Settings**, paste an AI Studio Gemini key
+2. Launch with workshop launcher (see [PARTICIPANTS.md](./PARTICIPANTS.md)), open **Settings**, paste an AI Studio Gemini key
    (free — [aistudio.google.com/apikey](https://aistudio.google.com/apikey)),
-   hit **Test**.
+   hit **Test** — or use offline demos with no key.
 
-> **macOS first launch:** the app is **not code-signed**. Gatekeeper will say
-> it's "damaged" or "cannot be opened." Either right-click the app → **Open** →
+> **macOS first launch (packaged builds only):** unsigned apps may show Gatekeeper warnings. Either right-click the app → **Open** →
 > **Open**, or run once:
 > ```bash
 > xattr -cr /Applications/DrC.app
@@ -40,7 +43,7 @@ AI-powered Csound creative tool. Electron app.
 ### Clone and install
 
 ```bash
-git clone https://github.com/mateolarreaferro/DRC-Standalone.git
+git clone -b lac-2026-csound7 https://github.com/csounder/DRC-Standalone.git
 cd DRC-Standalone
 npm install
 ```

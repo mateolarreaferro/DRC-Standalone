@@ -1,0 +1,92 @@
+[
+  {
+    "id": "model_models_misc_synths_analoggbuzzbass",
+    "title": "Analog Gbuzz Bass",
+    "filename": "models/misc_synths/AnalogGbuzzBass.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 280,
+    "description": "Analog Gbuzz Bass — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_deepnote",
+    "title": "Deep Note",
+    "filename": "models/misc_synths/DeepNote.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 286,
+    "description": "Deep Note — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_feedbacksimulator",
+    "title": "Feedback Simulator",
+    "filename": "models/misc_synths/FeedbackSimulator.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 292,
+    "description": "Feedback Simulator — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_flute2",
+    "title": "Flute2",
+    "filename": "models/misc_synths/Flute2.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 294,
+    "description": "Flute2 — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_frenchhorn",
+    "title": "FM Lead 3",
+    "filename": "models/misc_synths/FrenchHorn.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 295,
+    "description": "FM Lead 3 — wavetable horn (FrenchHorn.csd, legacy Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_physicalmodels1",
+    "title": "Physical Models1",
+    "filename": "models/misc_synths/PhysicalModels1.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 300,
+    "description": "Physical Models1 — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_stepsequencer",
+    "title": "Fat Pad 1",
+    "filename": "models/misc_synths/StepSequencer.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 304,
+    "description": "Moog-style step sequencer pad — renamed Fat Pad 1 (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_wavesequencing",
+    "title": "Wave Sequencing",
+    "filename": "models/misc_synths/WaveSequencing.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 309,
+    "description": "Wave Sequencing — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_misc_synths_waveshapebrass",
+    "title": "Waveshape Brass",
+    "filename": "models/misc_synths/WaveshapeBrass.csd",
+    "playerDemo": true,
+    "demoGroup": "Misc Synths",
+    "demoOrder": 312,
+    "description": "Waveshape Brass — Misc Synths (Dr. B collection)"
+  },
+  {
+    "id": "model_models_granular_midi_grain",
+    "title": "Granular 1",
+    "filename": "models/granular/midi_grain.csd",
+    "playerDemo": true,
+    "demoGroup": "Granular",
+    "demoOrder": 410,
+    "description": "Granular 1 — MIDI granular synth"
+  }
+]

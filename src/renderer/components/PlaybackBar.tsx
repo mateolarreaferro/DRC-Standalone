@@ -1,6 +1,8 @@
 import { type CSSProperties } from 'react'
 import { usePlaybackStore } from '../stores/playbackStore'
 import { useArtifactStore } from '../stores/artifactStore'
+import { useCsoundConsoleStore, isConsoleVisible } from '../stores/csoundConsoleStore'
+import { CSOUND_CONSOLE_HEIGHT } from './CsoundConsole'
 import { stopPlayback } from '../lib/playback'
 
 // Floating pill shown whenever audio is playing or in error state. Visible
@@ -11,13 +13,19 @@ export default function PlaybackBar() {
   const message = usePlaybackStore((s) => s.message)
   const setActive = useArtifactStore((s) => s.setActive)
   const artifact = useArtifactStore((s) => s.artifacts.find((a) => a.id === artifactId))
+  const consoleVisible = useCsoundConsoleStore((s) =>
+    isConsoleVisible({ userPinned: s.userPinned, errorReveal: s.errorReveal, editorHidesConsole: s.editorHidesConsole }),
+  )
+  const consoleExpanded = useCsoundConsoleStore((s) => s.expanded)
+  const setConsoleExpanded = useCsoundConsoleStore((s) => s.setExpanded)
 
   if (!artifactId || status === 'idle') return null
 
   const isError = status === 'error'
+  const consoleOffset = consoleVisible && consoleExpanded ? CSOUND_CONSOLE_HEIGHT + 14 : 14
 
   return (
-    <div style={{ ...styles.bar, ...(isError ? styles.barError : {}) }}>
+    <div style={{ ...styles.bar, ...(isError ? styles.barError : {}), bottom: consoleOffset }}>
       <button
         onClick={() => artifact && setActive(artifact.id)}
         style={styles.titleBtn}
@@ -35,6 +43,16 @@ export default function PlaybackBar() {
         <span style={styles.title}>{artifact?.title ?? 'Csound'}</span>
         <span style={styles.status}>{message || status}</span>
       </button>
+      {isError && consoleVisible && !consoleExpanded && (
+        <button
+          type="button"
+          onClick={() => setConsoleExpanded(true)}
+          style={styles.consoleBtn}
+          title="Show Csound output"
+        >
+          Console
+        </button>
+      )}
       <button onClick={() => void stopPlayback()} style={styles.stopBtn}>■ Stop</button>
     </div>
   )
@@ -43,7 +61,6 @@ export default function PlaybackBar() {
 const styles: Record<string, CSSProperties> = {
   bar: {
     position: 'fixed',
-    bottom: 14,
     left: '50%',
     transform: 'translateX(-50%)',
     display: 'flex',
@@ -114,6 +131,17 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--bg-primary)',
     fontSize: 11,
     fontWeight: 700,
+    fontFamily: 'var(--font-primary)',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  consoleBtn: {
+    padding: '6px 12px',
+    borderRadius: 999,
+    border: '1px solid var(--border)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-secondary)',
+    fontSize: 11,
     fontFamily: 'var(--font-primary)',
     cursor: 'pointer',
     flexShrink: 0,

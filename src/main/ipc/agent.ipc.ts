@@ -10,7 +10,12 @@ export function handleAgentIPC(ipcMain: IpcMain): void {
     return { id: session.id, agent: agentName }
   })
 
-  ipcMain.handle('session:send', async (event, sessionID: string, content: string) => {
+  ipcMain.handle('session:cancel', async (_event, sessionID: string) => {
+    SessionManager.cancel(sessionID)
+    return { ok: true }
+  })
+
+  ipcMain.handle('session:send', async (event, sessionID: string, content: string, opts?: { retry?: boolean; variant?: boolean }) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return { ok: false, error: 'No window' }
 
@@ -19,7 +24,7 @@ export function handleAgentIPC(ipcMain: IpcMain): void {
     ;(async () => {
       try {
         Log.info(`Processing message in session ${sessionID}`)
-        const stream = SessionManager.send(sessionID, content)
+        const stream = SessionManager.send(sessionID, content, opts ?? {})
         for await (const chunk of stream) {
           if (window.isDestroyed()) break
           window.webContents.send('stream:chunk', {

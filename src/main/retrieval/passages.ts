@@ -81,10 +81,23 @@ export function searchPassages(query: string, max = 3): Passage[] {
   }
 
   const ranked = Array.from(scores.entries())
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => {
+      const pa = passageSourcePriority(passages![a[0]].source_book)
+      const pb = passageSourcePriority(passages![b[0]].source_book)
+      if (pa !== pb) return pb - pa
+      return b[1] - a[1]
+    })
     .slice(0, max)
     .map(([idx]) => passages![idx])
   return ranked
+}
+
+function passageSourcePriority(sourceBook: string): number {
+  const s = sourceBook.toLowerCase()
+  if (s.includes('floss')) return 10
+  if (s.includes('lazzarini')) return 8
+  if (s.includes('boulanger') || s.includes('csound-book')) return 7
+  return 1
 }
 
 export function passageCount(): number {

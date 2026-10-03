@@ -1,0 +1,62 @@
+[
+  {
+    "id": "chowning_fm_bell",
+    "title": "FM Nasty Lead 1",
+    "filename": "models/chowning/chowning_fm_bell.csd",
+    "playerReady": true,
+    "playerDemo": true,
+    "demoGroup": "Chowning FM",
+    "demoOrder": 350,
+    "description": "Classic 5:7 inharmonic FM nasty lead — Chowning/Mathews ratios (fc=200 fm=280 @ A440)"
+  },
+  {
+    "id": "chowning_fm_bass",
+    "title": "FM Pad",
+    "filename": "models/chowning/chowning_fm_bass.csd",
+    "playerReady": true,
+    "playerDemo": true,
+    "demoGroup": "Chowning FM",
+    "demoOrder": 351,
+    "description": "1:1 FM pad timbre — Chowning brasslike preset (fc=fm=440)"
+  },
+  {
+    "id": "chowning_fm_wood",
+    "title": "FM Nasty Lead 2",
+    "filename": "models/chowning/chowning_fm_wood.csd",
+    "playerReady": true,
+    "playerDemo": true,
+    "demoGroup": "Chowning FM",
+    "demoOrder": 352,
+    "description": "16:11 wood-drum FM ratio — Chowning wood preset (fc=80 fm=55 @ A440)"
+  },
+  {
+    "id": "chowning_fm_sitar",
+    "title": "FM Keys 1",
+    "filename": "models/chowning/chowning_fm_sitar.csd",
+    "playerReady": true,
+    "playerDemo": true,
+    "demoGroup": "Chowning FM",
+    "demoOrder": 360,
+    "description": "Williams parallel/stacked FM keys — E.W. Williams Chowning collection"
+  },
+  {
+    "id": "chowning_dsf_brass",
+    "title": "FM Pad 2",
+    "filename": "models/chowning/chowning_dsf_brass.csd",
+    "playerReady": true,
+    "playerDemo": true,
+    "demoGroup": "Chowning FM",
+    "demoOrder": 362,
+    "description": "Moorer discrete-summation pad — Williams after Moorer CMJ"
+  },
+  {
+    "id": "chowning_williams_wood",
+    "title": "FM Lead 1",
+    "filename": "models/chowning/chowning_williams_wood.csd",
+    "playerReady": true,
+    "playerDemo": true,
+    "demoGroup": "Chowning FM",
+    "demoOrder": 364,
+    "description": "Wave-shaped ring-mod FM lead — Williams Chowning collection"
+  }
+]

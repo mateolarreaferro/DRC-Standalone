@@ -3,7 +3,7 @@ import { useArtifactStore, primaryContent, type ArtifactType } from '../stores/a
 // One short line per type, so the model keeps the right output format.
 const FORMAT_HINT: Record<ArtifactType, string> = {
   csd: 'Emit the full updated <CsoundSynthesizer>…</CsoundSynthesizer>.',
-  webapp: 'Emit the full updated <!DOCTYPE html>…</html>; do not revert to a plain CSD.',
+  webapp: 'Describe the change; the host re-converts from orchestra CSD. Do not emit HTML.',
   vst: 'Keep the <Cabbage>…</Cabbage> section and emit the full updated document.',
 }
 

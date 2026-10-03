@@ -1,95 +1,130 @@
-# HANDOFF log
+# Handoff — Web App Keyboard & Export Path
 
-Append-only notes from agents and the main thread when finishing a chunk of work. Keep entries short — one block each, dated, with the files touched and any caveats.
+**Pick up here:** Dr.C Standalone web-app keyboard is fixed in code but not yet fully hardened or shared with other keyboard UIs.
 
-Format:
+---
+
+## Start Here Tomorrow
+
+### 1. Smoke-test the fix (15 min)
+
+```bash
+cd /Users/richardboulanger/Dr.C-Standalone
+npm run dev
 ```
-## [yyyy-mm-dd] <agent or human> — <subject>
-- files: list
-- notes: surprises, deviations, follow-ups
+
+- Convert a **melodic** patch (uses `p4`) to Web App.
+- Check keyboard visually in iframe and in browser.
+- Press a few QWERTY keys; confirm pitch rises left → right.
+- If anything still looks wrong, compare side-by-side with **Player** page keyboard on the same patch.
+
+### 2. Read the one file that matters
+
+All export keyboard logic lives in:
+
+`src/renderer/lib/webHarness.ts`
+
+| Section | Lines (approx.) | What |
+|---------|-----------------|------|
+| HTML shell | ~169–177 | `#controls`, `#keyboard`, `#octaveLabels` order |
+| `STYLES` | ~326–383 | Piano CSS (anchoring, sizes, colors) |
+| `RUNTIME` → `buildKeyboard()` | ~668–760 | Key DOM, MIDI map, QWERTY handlers |
+
+Do **not** edit FM Bell’s flex-wrap “keyboard” expecting it to match — that app is intentionally a button row.
+
+---
+
+## Likely Next Steps (priority order)
+
+### A. Confirm black-key spacing on different screen sizes
+
+`BLACK_SHIFT = 12` was copied from Fibonacci FM (18px white keys). We use 32px white keys. It may need tuning:
+
+- Try `Math.round(WHITE_W * 12 / 18)` → **21** if black keys look slightly off-center between whites.
+- Tune in browser DevTools on a generated export before changing the constant.
+
+### B. Deduplicate keyboard logic (medium effort, high value)
+
+Three similar implementations exist:
+
+| Location | Tech |
+|----------|------|
+| `webHarness.ts` | DOM + inlined CSS/JS in export |
+| `PianoKeyboard.tsx` | React SVG (Player) |
+| `playerKeyboardBind.ts` | Shared QWERTY ↔ MIDI map (Player only) |
+
+**Recommendation:** Extract a small shared module, e.g. `src/shared/pianoKeyboardLayout.ts`, exporting:
+
+- `PIANO_PATTERN`, `WHITE_W`, `BLACK_SHIFT`, octave range
+- `midiToKeyLabel`, `keyEventToMidi` (move from duplicated inline maps)
+- Optional: pure functions for black-key `left` position
+
+Then import from `webHarness.ts` (build-time string embed) and `PianoKeyboard.tsx`. Avoids the keyboard drifting again.
+
+### C. Add a minimal automated check (optional)
+
+No unit tests exist for `webHarness` today. Low-cost option:
+
+- Export `buildWebApp()` with a tiny fixture CSD in a script or vitest test.
+- Assert generated HTML contains `top: 0`, `PIANO_PATTERN`, and expected key count (21 white keys for 3 octaves).
+
+### D. Commit when satisfied
+
+Changes are local only until committed. Suggested message:
+
+```
+Fix exported web app piano keyboard layout and orientation.
+
+Align webHarness keyboard with Player: data-driven white/black pattern,
+correct black-key positioning, top-anchored keys, controls above keyboard.
 ```
 
 ---
 
-## [2026-05-05] Claude (main) — v1.1.0 release: PATH fix, prompt cleanup, MIDI Learn diagnostics, Settings polish, LIVE removal, graph dedupe, tooltip animation
-- files:
-  - src/main/util/csound-path.ts (new)
-  - src/main/ipc/csound.ipc.ts (PATH on every spawn site, multi-line `<CsOptions>` normalization in writeCsd, removed `csound:live:*` IPC stubs)
-  - src/main/ipc/llm.ipc.ts (`maxTokens` 4000 → 8192)
-  - src/main/tool/{bash,csound_compile,csound_render,csound_smoke}.ts (PATH augmentation)
-  - src/renderer/prompts/convert.ts (new `cleanSource()` strips bsbPanel/bsbPresets/MacGUI/MacOptions/EventPanel and trailing junk after `</CsoundSynthesizer>`)
-  - src/renderer/pages/PlayerPage.tsx (case-insensitive spec lookup + console.warn in `handleCCBinding`; LIVE button + handler + styles removed)
-  - src/renderer/pages/SettingsPage.tsx (banner says "Saved in DRC", distinguishes saved-vs-env, Gemini link is a real `<a target="_blank">`, new `extLink` style)
-  - src/renderer/stores/playerStore.ts (`isLiveMode`/`setLiveMode` removed)
-  - src/renderer/components/layout/Sidebar.tsx (tooltip uses opacity-only fade)
-  - src/renderer/styles/globals.css (new `drc-fade-opacity` keyframes)
-  - src/preload/index.ts (`liveStart`/`liveChannel`/`liveHotReload` bridge methods removed)
-  - resources/graph/computer-music-history.json (merged duplicate "csound-lang" → "csound": 1236 edges rewritten, 189 duplicates dropped, 0 self-loops; node count 2985 → 2984, edge count 5377 → 5188)
-  - scripts/smoke-test.mjs (new — 20-case end-to-end smoke test)
-  - package.json (1.0.0 → 1.1.0)
-- notes:
-  - **PATH bug was root-causing every "Csound not found" symptom in packaged builds.** macOS Electron is launched by `launchd` with a stripped `/usr/bin:/bin` PATH, so `/opt/homebrew/bin/csound` is invisible to `child_process.spawn`. `withCsoundPath()` prepends `/opt/homebrew/bin`, `/usr/local/bin`, and the two CsoundLib64 framework `Resources/bin` paths. Applied to every spawn/execFile site — five tool files plus three handlers in csound.ipc.ts. Order matters (prepend, not append) so a stale csound shim elsewhere on PATH can't win.
-  - **Csound 6.18 has a parser bug with `<CsOptions>-odac -d</CsOptions>` on a single line under `--syntax-check-only`.** It mis-parses the next tag as if it were part of options content and bails with `Invalid arguments in <CsOptions>: <CsInstruments>`. Multi-line `<CsOptions>...\n-odac -d\n...</CsOptions>` works fine. The PLAYER_TEMPLATE emits the one-liner and so do many user CSDs; rather than patch every adapter output, `writeCsd` normalizes to multi-line on disk before passing the path to csound. The `--syntax-check-only` flag itself was kept — combined with `-n` it's the lightest valid syntax check.
-  - **Adapt was truncating outputs.** `maxTokens: 4000` was below the actual length of an adapted player CSD with `chn_k` bank + `instr 100` helper + reverb bus + rewritten voice (typically 5–7K tokens). The model would stop mid-orchestra, the closing `</CsoundSynthesizer>` tag never arrived, and `extractCsd` returned null with a generic "missing block" error. Bumped to 8192 — leaves headroom and stays well below the model's per-call limit.
-  - **CsoundQT metadata was poisoning prompts.** Real-world `.csd` files often trail a `<bsbPanel>...</bsbPanel>` block (CsoundQT's GUI definition) that's hundreds of lines of XML. The model was treating its widget definitions as part of the patch ("the source defines a 'gain' widget so I should keep it"). `cleanSource()` runs in `buildConvertPrompt` and strips the GUI blocks plus anything after `</CsoundSynthesizer>` before the source hits the prompt template.
-  - **MIDI Learn most-likely failure mode is a stale binding referencing a chn_k name that no longer exists in the current patch.** Bindings persist in localStorage but the chn_k bank is per-CSD. Pre-fix: `handleCCBinding` did `channelSpecs.find(c => c.name === channelName)`; if undefined, silently bailed → CC moves had no effect. Post-fix: case-insensitive fallback (handles trivial casing drift between adapter runs), then a `console.warn` listing what *is* in the current bank if no match — DevTools surfaces the actual cause. Did *not* auto-prune stale bindings; the user can clear them from the store if needed.
-  - **Settings was overclaiming key state.** `Provider.availableProviders()` (in `provider.ts:64-70`) returns providers that are saved *or* present via env vars (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, etc.). The old banner said "Connected: google" while the Saved row was empty whenever a shell-exported key was around. New banner distinguishes "Saved in DRC: …" from "Using API key from environment (…)" and never claims verification — that's what the per-key Test button is for.
-  - **Gemini link was a `<span>`.** Now an `<a target="_blank" rel="noopener noreferrer">`; the existing `setWindowOpenHandler` in `main/index.ts:60-63` routes those through `shell.openExternal`. No new IPC needed.
-  - **LIVE button was a stub.** Toggled `isLiveMode` boolean, flipped its own border red, called nothing else. Three `csound:live:*` IPC handlers all returned `{ success: false, error: 'Live engine not yet implemented' }` and nothing in the renderer called them. Deleted the button, store flag, IPC handlers, and preload bridge methods.
-  - **Sidebar tooltip animation was clobbering its centering offset.** `drc-fade-in` keyframes set `transform: translateY(8px) → translateY(0)`, overriding the static `transform: translateY(-50%)` that vertically centers the tooltip. Visible result: tooltip pops in below center then snaps up. New `drc-fade-opacity` keyframe is opacity-only; the static transform survives.
-  - **Knowledge graph had two "Csound" nodes.** `csound-lang` (434 edges) and `csound` (1236 edges) — same label, year, type. Kept `csound` as canonical (more edges, more accurate description), unioned aliases (12 unique), rewrote 1236 edges, dropped 189 duplicates created by the merge, no self-loops. The merge script is `/tmp/merge-csound.mjs`; not committed because it's a one-shot. Other Csound-related nodes (`ctcsound`, `csoundqt`, `csound-api`, etc.) are distinct entities and were left intact.
-  - **Smoke test (`node scripts/smoke-test.mjs`) is the regression catch-all.** 20 cases across 6 sections: PATH lookup under stripped env (proves `withCsoundPath` actually finds csound), `cleanSource` behavior, `parseChannels` round-trip and MIDI-name-correctness, real csound spawn (compile + render + audible-output check on a synthetic player-shaped CSD), Settings-page source assertions, and a per-file tsc-vs-HEAD-baseline delta. The repo has pre-existing tsc errors on HEAD (retrieval, session, apply_csd_patch, CsdEditor, Graph3D, etc.); the test gates only on whether files this commit touched exceeded their HEAD baseline. If HEAD moves and the baseline drifts, refresh `BASELINE_NODE` / `BASELINE_WEB` in the test.
-  - **Build + release shipped.** `npm run dist:mac` produced 4 mac artifacts (arm64+x64 × dmg+zip). Tagged `v1.1.0`, pushed `main` + tag, created GitHub release with all artifacts and `latest-mac.yml` for auto-update: https://github.com/mateolarreaferro/DRC-Standalone/releases/tag/v1.1.0. App is unsigned — Gatekeeper note in README still applies (`xattr -cr /Applications/DrC.app`).
-  - **Did NOT ship Windows or Linux builds.** `dist:win` and `dist:linux` scripts exist in package.json but weren't run; would require a Windows/Linux host or cross-compile setup. Not currently a blocker — README's Releases link works for mac users today.
-  - **Did NOT fix the pre-existing tsc errors.** Out of scope; they predate this session and would need their own pass (notably `apply_csd_patch.ts` ToolResult type mismatch, `retrieval.ipc.ts` missing `Retrieval.deepSearch`, `Graph3D.tsx` nodeVal typing, `CsdEditor.tsx` Monaco `setLanguage`).
-  - Open questions / follow-ups: (1) The MIDI-Learn diagnostic only fires in DevTools — if users still report bound CCs not working, the next step is checking the main-process log for `setChannel` warnings (process dead, stdin unavailable). (2) `PlayerPage` does not auto-prune stale bindings on CSD swap; consider adding once we confirm the diagnostic surfaces enough info. (3) Adapter occasionally still emits `chnget` at global scope despite the template's explicit warning — that produces silent-knob CSDs even after this commit's fixes. A linter pass on the adapted output (reject + autofix) would catch it; out of scope for this release.
+## Pitfalls to Avoid
 
-## [2026-05-31] Claude (main) — in-context memory + learning, HITL UI, narration suggestions, artifact-edit fix
-- commits: `143483c` (memory + HITL + .claude toolkit), `cee0454` (concise output + narration suggestions + canonical facts), `07ceafa` (Web Apps full-screen). Artifact-edit fix + these doc updates uncommitted at time of writing.
-- files (new): `src/main/memory/{db,schema,store,learning,lessons,retrieve}.ts`; `src/renderer/components/chat/{MessageFeedback,ProfileBadge,SessionHistory}.tsx`; `CLAUDE.md`; `.claude/` (curated agents/commands/skills/rules from everything-claude-code).
-- files (modified): `src/main/{index.ts, session/session.ts, session/narration.ts, agent/agent.ts, ipc/memory.ipc.ts, ipc/agent.ipc.ts}`; `src/preload/index.ts`; `src/renderer/{hooks/useStream.ts, lib/playback.ts, lib/artifactContext.ts, pages/AgentPage.tsx, pages/WebAppsPage.tsx, stores/sessionStore.ts}`; `package.json` (better-sqlite3 in `files` + `asarUnpack`). Deleted `src/main/agent/prompts/sketch.txt`.
-- notes:
-  - **Memory is pure in-context (no fine-tuning), SQLite via better-sqlite3 at `userData/drc/memory.db`.** All writes early-return if the native module didn't load (`MemoryDB.isReady()`), so memory failures never break the agent. Tables: `sessions`, `messages`, `feedback`, `error_fixes`, `lessons`, single-row `learning`.
-  - **better-sqlite3 was installed but never wired up — and its binary was the wrong arch (x86 on this arm64 mac).** Had to `npx electron-builder install-app-deps` to rebuild for arm64 + Electron's ABI. Verified loading under a headless Electron run. **If memory silently no-ops after a fresh `npm install` or Electron bump, re-run `install-app-deps`.** Packaged builds need `node_modules/better-sqlite3/**` in `build.files` + `asarUnpack` (done).
-  - **Three learning signals, all about improving GENERATIONS, not modeling the user.** Earlier draft had a "user expertise level" derived from thumbs — removed as conceptually wrong (a 👎 means the output was bad, not that the user is a beginner). The only user-facing "level" is the Complex/Sine mode toggle. (1) Remembered instructions: `Lessons.maybeCapture` runs a small-model extraction on user turns that pass a phrasing gate (`always`/`when I ask`/`should`/…), stores durable rules, injects them as `<remembered-instructions>` at the TOP of every prompt AND echoes a keyword-matched rule inline next to the request (system-prompt-only injection got ignored by the model — inline was the fix). (2) `Learning` signed technique/opcode weights from 👍/👎/accepted-fix. (3) Error→fix library auto-captured when an autofix-and-play succeeds (`playback.ts` `lastFailure` → `accepted_fix`).
-  - **Removed Sketch agent mode entirely** (agent registry, prompt file, mode toggle union, session env block). Mode toggle is now Complex/Sine only.
-  - **Narrator (`narration.ts`) reworked:** exactly 2 short complete sentences (the old run-ons hit the HARD_CAP and got "…"-truncated); no em/en dashes or semicolons; `CANONICAL_FACTS` map injects authoritative attributions the narrator MUST use (FM→Chowning, bell→Risset, granular→Xenakis/Roads, waveguide→Smith/Karplus, subtractive→Moog, reverb→Schroeder, vocoder→Dudley) so it never omits the obvious origin regardless of retrieval. A second small-model pass emits 2–3 clickable `suggestions` ("Generate a classic Risset bell") streamed as a new `suggestions` chunk type → `useStream` attaches them to the CONTEXT message → rendered as a centered uniform chip stack; click fires a normal prompt.
-  - **Concise output + no em dashes:** `<response-style>` block in `buildSystemPrompt` tells the main agent to keep prose to ~1 sentence around the artifact and ban em/en dashes (was crowding out / truncating the CSD). Renderer strips em/en dashes from chat + narration prose as a backstop.
-  - **Artifact-edit bug fix (user-reported):** opening an older version in the panel then asking for a change edited the NEWEST version, because `wrapWithArtifactContext` sent only a format hint and relied on chat history. Now it embeds the **active artifact's exact content** as the edit base, and the new version branches from the loaded one (`editBaseRef` in AgentPage → `artifactStore.updatePrimary`). Format conversions still start a fresh chain (type changes). Verified with an esbuild-bundled Node test (10/10) covering open-old-version → edit-targets-it → lineage. **Cosmetic caveat:** branching from an old version can produce a duplicate version *number* in the history list (content is correct); left alone to avoid scope creep.
-  - **Web Apps detail view:** preview full-width by default; HTML source behind an "Open Code" toggle (was a split with the code always shown).
-  - **`.claude/` toolkit added** (curated subset from `Reference Repos/everything-claude-code-main`): agents (planner, code-reviewer, build-error-resolver, doc-updater), commands (`/plan` `/verify` `/code-review` `/learn`), skills (verification-loop, continuous-learning-v2, iterative-retrieval, strategic-compact, claude-api), TS + common rules. Some rules cross-reference agents/skills not copied (e.g. e2e-runner) — harmless dangling refs.
-  - **Pre-existing tsc baseline unchanged at 10 node / 10 web** — every change verified net-zero new errors against HEAD. Same pre-existing errors as the v1.1.0 entry (retrieval `deepSearch`, session `wake?.()`, apply_csd_patch, tool/*, CsdEditor, Graph3D, etc.). Did NOT fix them (out of scope).
-  - **Minor:** DB path logs as `…/drc/drc/memory.db` (doubled `drc`) because `MemoryDB.dbPath()` joins `userData/drc` and this machine's `userData` already ends in `drc`. Harmless and consistent with `config.ipc.ts`; not changed.
-  - **Did NOT ship a build/release.** All work committed to `main` and pushed; no new version tag or installer this session.
+1. **Stale exports** — Users must re-convert; old `index.html` files keep the broken keyboard.
+2. **Editing the wrong keyboard** — Web Apps gallery (`WebAppsPage.tsx`) serves bundled HTML (`fibonacci-fm.html`, etc.), not `webHarness.ts`.
+3. **`bottom: 0` on black keys** — That was the upside-down bug. Keep all keys `top: 0`; black keys are shorter, so they naturally sit at the back.
+4. **LLM HTML** — Modern path does not ask the model for HTML. Keyboard bugs are always in `webHarness.ts`, not the conversion prompt.
+5. **MIDI vs Hz** — Web keyboard sends **Hz in p4** and **0..1 velocity in p5** via `adaptOrcForWebKeyboard()` in the same file. Player uses a different dispatch path; don’t conflate them when debugging sound.
 
-## [2026-05-31] Claude (main) — deterministic "Convert to Web App" harness + Cabbage integration (shipped)
-- commit: `bdcd537` (pushed to `origin/main`). Installers built (`npm run dist:mac`): `release/DrC-1.1.0{,-arm64}.dmg` + matching `.zip`. Version stayed 1.1.0 (no tag bump this session).
-- files (new): `src/renderer/lib/webHarness.ts` (web-app builder, mine); `src/main/util/config.ts` (shared config accessor, Cabbage work).
-- files (modified, web harness): `src/renderer/lib/parseChannels.ts` (exported `extractOrchestra`), `src/renderer/lib/playback.ts` (added `compileCheckCsd`), `src/renderer/pages/AgentPage.tsx` (one-shot webapp interception), `src/renderer/prompts/convert.ts` (`WEBAPP_TEMPLATE` now emits a CSD, sharper i-rate envelope rule).
-- files (modified, Cabbage integration — concurrent work, committed together): `src/main/ipc/{config,export}.ipc.ts`, `src/renderer/pages/SettingsPage.tsx`, `src/renderer/components/artifacts/{ConvertMenu,ArtifactPanel}.tsx`, `src/renderer/components/chat/ArtifactCard.tsx`, `src/renderer/lib/tabMeta.ts`, `src/preload/index.ts`. Plus memory tweaks in `src/main/memory/{lessons,retrieve}.ts` + `session/session.ts`.
-- what changed (web app): "Convert to Web App" no longer asks the model to hand-write ~350 lines of HTML/JS. The LLM emits ONLY a web-ready orchestra CSD with a `chn_k` control manifest; `AgentPage` intercepts that turn, parses the manifest (`parseChannels`), and `buildWebApp` assembles a fixed, self-contained HTML page (live `setControlChannel` sliders, real master Start/Stop, keyboard for note-based patches / always-on for textures). UI/wiring is correct by construction. Same pattern the desktop Player already uses.
+---
 
-### Mistakes made this session — DO NOT REPEAT
-1. **A cross-turn stateful flag broke the WHOLE app (auto-load + auto-play of every artifact).** First implementation kept `pendingWebappConvertRef` set ACROSS multiple turns to power a conversion-time autofix loop. When a fix-response ever came back as not-a-clean-CSD, the flag got stuck `true`; after that, the *next* CSD to stream in (including the normal post-play runtime-autofix) was hijacked by the webapp code instead of loading/playing as a normal artifact. Symptom the user hit: "nothing compiles / artifacts don't auto-load." **Rule: a flag that gates how an assistant turn is handled must be ONE-SHOT — set when the action is requested, cleared the instant that single turn is consumed. Never let such a flag survive into an unrelated later turn.** Current `pendingWebappConvertRef` is cleared inside the same effect run that handles the conversion turn; verify it stays that way.
-2. **`compileOrc` fails SILENTLY in `@csound/browser`.** On a parse error it does NOT reject — it returns a non-zero status code, leaves instruments undefined, and `start()` still resolves. Result was a web app showing a happy "Ready" with zero sound. The harness now checks the `compileOrc` return code and throws a visible error. **Any future browser-Csound code must check compile/compileOrc return codes; never assume a resolved promise means success.**
-3. **The model violates the `linsegr`/`expsegr` i-rate contract — specifically with a k-rate SUSTAIN value.** `kEnv linsegr 0, iAtt, 1, iDec, kSus, iRel, 0` → "Unable to find opcode entry for 'linsegr' with matching argument types" → the WHOLE orchestra fails to parse → silent. The prompt warned about i-rate TIMES but the model passed a k-rate VALUE. Fixed by making the rule say EVERY arg (every time AND every breakpoint value, incl. sustain) must be i-rate, with an explicit `iSus chnget "sustain"` example. Recurring class of bug; see [[webapp-conversion-needs-compile-gate]] memory.
-4. **Shipped before verifying audio end-to-end.** I declared the harness done after build + typecheck + an HTML-structure smoke test, but never confirmed a generated app actually MADE SOUND — the first thing the user tried produced silence. **For audio features, the acceptance test is audible output (offline render + peak-amplitude check, or a live listen), not "it compiles / types pass."** Debugging tip used: the generated orchestra is in `messages` in `~/Library/Application Support/drc/drc/memory.db`; pull it, run `csound --syntax-check-only -n file.csd` (mirrors the app's `csound:compile`) and an offline `-o out.wav -W` render to check the peak amplitude.
+## Related Files (reference only)
 
-- follow-ups / known gaps:
-  - **Conversion-time autofix was REMOVED, not fixed.** A non-compiling orchestra now ships as-is and the harness surfaces the error at Start (user re-converts or edits). A safe re-introduction would be a ONE-SHOT compile check (verify once, never persist a cross-turn flag) — `compileCheckCsd` in `playback.ts` is left in place for exactly that and is currently unused.
-  - **Iterating a converted web app by SOUND** ("make the reverb bigger") edits the generated HTML, not the orchestra. v2 would store the source CSD as a derived file and re-run the builder on edits.
-  - **Installers are unsigned/unnotarized.** Gatekeeper will block on other Macs ("damaged"); users need right-click→Open or `xattr -dr com.apple.quarantine /Applications/DrC.app`. Wire up Developer ID signing + notarization before wide distribution.
-  - tsc baseline still 10 node / 10 web (unchanged, pre-existing; not touched).
+| File | Role |
+|------|------|
+| `src/renderer/pages/AgentPage.tsx` | Triggers convert, calls `buildWebApp()` |
+| `src/renderer/lib/webappPrepare.ts` | Parses channels, `usesKeyboard()` |
+| `src/renderer/components/artifacts/WebAppArtifact.tsx` | iframe preview |
+| `src/main/ipc/export.ipc.ts` | Writes/opens `~/Documents/DrC/webapps/...` |
+| `src/renderer/components/player/PianoKeyboard.tsx` | Gold-standard visual reference |
+| `src/renderer/lib/playerKeyboardBind.ts` | Player QWERTY bindings |
 
-## [2026-06-01] Claude (main) — v1.2.0 release: Convert-to-Cabbage + reliable launch, web-app remount fix, AI-SDK pin, INSTALLATION.md
-- commit: `a9b8b02` (pushed to `origin/main`). GitHub release **v1.2.0** created with 4 mac artifacts (arm64+x64 × dmg+zip): https://github.com/mateolarreaferro/DRC-Standalone/releases/tag/v1.2.0. Version bumped 1.1.0 → 1.2.0.
-- files (new): `src/main/util/cabbage-path.ts` (auto-detection), `INSTALLATION.md` (agent runbook).
-- files (modified): `src/main/ipc/{config,export}.ipc.ts`, `src/main/provider/provider.ts`, `src/main/session/session.ts`, `src/preload/index.ts`, `src/renderer/pages/{AgentPage,SettingsPage}.tsx`, `src/renderer/components/OnboardingModal.tsx`, `src/renderer/stores/artifactStore.ts`, `package.json` + `package-lock.json`.
-- notes:
-  - **"Convert to VST" → "Convert to Cabbage" is UI-only.** The internal artifact type id stays `'vst'` (artifactStore type union, detection regex, convert templates, stored artifacts all unchanged) — only user-facing labels changed (ConvertMenu, ArtifactPanel, ArtifactCard, AgentPage hints/tags, tabMeta, the no-`<Cabbage>` error). A full rename of the type id would have churned detection/conversion/persistence for no user benefit. If you ever do rename it, migrate persisted artifacts too.
-  - **The "Cabbage won't open" bug was a false-success, not a missing path.** Old `launchCabbage` did `spawn('open', ['-a', 'Cabbage', csd])` in a try/catch and returned `ok:true` on the FIRST candidate — but `open -a` fails ASYNCHRONOUSLY with a non-zero exit when the app isn't found, so spawn never threw and the catch never ran. It always reported "Opened in Cabbage" while nothing launched (worked for installs literally named "Cabbage", silently failed for `CabbageLite`/versioned bundles/other locations). Fix: `openWithApp` uses `execFile('open', ...)` and AWAITS the exit code; honest failure with a Settings hint + a "Reveal file" button to the saved `.csd`. **Rule: `spawn('open', ['-a', name])` succeeding ≠ the app launched — you must await the exit code.**
-  - **Cabbage path is now configurable AND auto-detected.** `cabbage-path.ts` detects an install (macOS: glob `/Applications`+`~/Applications` for `Cabbage*.app`, then `mdfind -name Cabbage`; win: Program Files/LocalAppData glob; linux: `which`/common bins), cached per session. Launch prefers explicit `cabbagePath` (config.json) → detected → known names. Settings → Cabbage has a native "Choose Cabbage…" picker (`dialog.showOpenDialog`), a re-scan button, and shows what will be used. New IPC: `config:getCabbagePath` (returns `{path,exists,detected}`), `setCabbagePath`, `detectCabbage`, `chooseCabbagePath`, plus `export:revealFile`. Detection avoids Cabbage's bundle id (varied across releases) on purpose — name/location match is stable. **Verified macOS detection finds `/Applications/Cabbage.app`; Windows/Linux detection NOT tested on a real host.**
-  - **Web-app reverted to CSD after navigating away and back (user-reported, verified fixed).** Convert-to-Web-App wraps the model's orchestra CSD into HTML on the fly, but that lived only in component-local `pendingWebappConvertRef` + `msgArtifactMap`. Navigating to Web Apps unmounts AgentPage → those reset → the detection effect re-read the persisted message (raw CSD), found no mapping, and `addArtifact`'d a spurious **Csound v2**, clobbering the web app. Fix: artifacts carry `sourceMessageId`; the effect now RE-ADOPTS an existing artifact for that message (store survives navigation) instead of re-deriving, and never `updateInPlace`s a type-mismatched artifact. **User confirmed working.** **Known gap (documented, NOT fixed): converted web apps still don't survive a COLD app restart** — only the message (orchestra CSD) is persisted, so reopening the session re-derives a CSD. Proper fix = persist the built artifact/HTML alongside the message.
-  - **`@ai-sdk/google` pinned to 1.x on purpose (concurrent fix, committed here).** This app is AI SDK 4 (`ai@^4`, model spec `v1`). `@ai-sdk/google` 2.x/3.x are AI SDK 5 (spec `v2`) and make `streamText` throw "upgrade to AI SDK 5" on EVERY turn — this had bricked Gemini. `package.json` now `^1.2.22`; `assertV1` in provider.ts fails fast at model-load with an actionable message; `humanizeError` maps the SDK-mismatch string. **Do NOT bump the @ai-sdk/* packages without migrating the whole app to AI SDK 5.** Also added `config:deleteApiKey` (Remove button) + Settings/onboarding polish (not mine — committed as part of "commit everything").
-  - **INSTALLATION.md is an agent-oriented runbook** (distinct from the human-facing README): ordered steps with a **Verify** gate each, key setup both ways (`.env` dev / Settings packaged), an end-to-end smoke test, packaging + `gh release` steps, and a Gotchas section (the AI-SDK v1 pin is #1). Keep it in sync with README's Releases filename patterns.
-  - **Shipped mac only.** `dist:win`/`dist:linux` not run (need Windows/Linux tooling). Unsigned — Gatekeeper note still applies. tsc baseline unchanged (only new errors in touched files would be mine; none).
+---
+
+## Open Questions
+
+- [ ] Is keyboard orientation confirmed good on your machine after re-export?
+- [ ] Should black-key labels be hidden (Player shows them; some UIs don’t)?
+- [ ] Should exported keyboard match Player **exactly** (32px vs previous 36px width)?
+- [ ] Worth adding octave shift buttons like Fibonacci FM for web exports?
+
+---
+
+## Quick Debug Checklist
+
+| Symptom | Check |
+|---------|--------|
+| No keyboard at all | Orchestra must reference `p4`; `hasKeyboard` in generated HTML |
+| Wrong pitch | `noteOn()` → Hz via `midiToFreq()`; orchestra expects Hz not MIDI |
+| Black keys at bottom | CSS still using `bottom: 0` on `.piano .key` |
+| Button grid not piano | Old artifact or FM Bell template — re-convert via Agent |
+| Sliders dead | Separate issue — `chn_k` + in-instrument `chnget`, not keyboard |
+
+---
+
+## Contact Context
+
+Session work: user reported export keyboard upside down and wrong layout → fixed layout + flip in `webHarness.ts`. User asked for this handoff doc to continue tomorrow.

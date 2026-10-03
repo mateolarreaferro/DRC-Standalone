@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import Editor, { type OnMount } from '@monaco-editor/react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import type { OnMount } from '@monaco-editor/react'
 import type { ArtifactFile, FileLanguage } from '../../stores/artifactStore'
 import { useAppStore } from '../../stores/appStore'
+import { preferPlainEditor, setPreferRichEditor, useEditorStore } from '../../stores/editorStore'
 import { registerEditorThemes, monacoThemeFor } from '../editor/monacoThemes'
+import PlainCodeView from './PlainCodeView'
+
+const MonacoEditor = lazy(async () => {
+  await import('../../lib/monacoSetup')
+  const mod = await import('@monaco-editor/react')
+  return { default: mod.default }
+})
 
 const MONACO_LANG: Record<FileLanguage, string> = {
   csd: 'csound',
-  cabbage: 'csound', // close enough; cabbage widgets sit inside the CSD grammar
+  cabbage: 'csound',
   html: 'html',
   js: 'javascript',
   css: 'css',
@@ -40,11 +48,17 @@ interface Props {
 }
 
 export default function FileEditor({ file, onChange, editable }: Props) {
+  const forcePlain = useEditorStore((s) => s.forcePlain)
+  const [usePlain, setUsePlain] = useState(() => preferPlainEditor() || forcePlain)
   const [value, setValue] = useState(file.content)
   const [dirty, setDirty] = useState(false)
   const originalRef = useRef(file.content)
   const monacoRef = useRef<any>(null)
   const theme = useAppStore((s) => s.theme)
+
+  useEffect(() => {
+    if (forcePlain) setUsePlain(true)
+  }, [forcePlain])
 
   useEffect(() => {
     setValue(file.content)
@@ -54,7 +68,7 @@ export default function FileEditor({ file, onChange, editable }: Props) {
 
   useEffect(() => {
     if (monacoRef.current) monacoRef.current.editor.setTheme(monacoThemeFor(theme))
-  }, [theme])
+  }, [theme, usePlain])
 
   const handleMount: OnMount = (_editor, monaco) => {
     monacoRef.current = monaco
@@ -79,44 +93,70 @@ export default function FileEditor({ file, onChange, editable }: Props) {
     setDirty(false)
   }
 
+  const enableRichEditor = useCallback(() => {
+    setPreferRichEditor(true)
+    setUsePlain(false)
+  }, [])
+
   const readOnly = !editable || !onChange
+  const canEnableRich = typeof window !== 'undefined' && !!window.api
+
+  const banner = (
+    <div style={styles.banner}>
+      <span style={styles.filename}>{file.name}</span>
+      {file.derived && <span style={styles.badge}>derived view · read-only</span>}
+      {!file.derived && !editable && <span style={styles.badge}>read-only</span>}
+      {dirty && <span style={styles.dirty}>● unsaved</span>}
+      <div style={{ flex: 1 }} />
+      {usePlain && canEnableRich && (
+        <button type="button" onClick={enableRichEditor} style={styles.neutralBtn}>
+          Syntax highlighting
+        </button>
+      )}
+      {dirty && (
+        <>
+          <button type="button" onClick={revert} style={styles.neutralBtn}>Revert</button>
+          <button type="button" onClick={apply} style={styles.primaryBtn}>Apply · New Version</button>
+        </>
+      )}
+    </div>
+  )
+
+  if (usePlain) {
+    return (
+      <div style={styles.container}>
+        {banner}
+        <PlainCodeView content={value} filename={file.name} />
+      </div>
+    )
+  }
 
   return (
     <div style={styles.container}>
-      <div style={styles.banner}>
-        <span style={styles.filename}>{file.name}</span>
-        {file.derived && <span style={styles.badge}>derived view · read-only</span>}
-        {!file.derived && !editable && <span style={styles.badge}>read-only</span>}
-        {dirty && <span style={styles.dirty}>● unsaved</span>}
-        <div style={{ flex: 1 }} />
-        {dirty && (
-          <>
-            <button onClick={revert} style={styles.neutralBtn}>Revert</button>
-            <button onClick={apply} style={styles.primaryBtn}>Apply · New Version</button>
-          </>
-        )}
-      </div>
+      {banner}
       <div style={styles.editorWrap}>
-        <Editor
-          height="100%"
-          language={MONACO_LANG[file.language]}
-          value={value}
-          onMount={handleMount}
-          onChange={handleEdit}
-          options={{
-            readOnly,
-            minimap: { enabled: false },
-            fontSize: 12,
-            fontFamily: 'var(--font-mono), SF Mono, monospace',
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            renderLineHighlight: 'line',
-            tabSize: 2,
-            wordWrap: 'off',
-            padding: { top: 12, bottom: 12 },
-          }}
-          theme={monacoThemeFor(theme)}
-        />
+        <Suspense fallback={<PlainCodeView content={value} filename={file.name} />}>
+          <MonacoEditor
+            height="100%"
+            language={MONACO_LANG[file.language]}
+            value={value}
+            onMount={handleMount}
+            onChange={handleEdit}
+            options={{
+              readOnly,
+              minimap: { enabled: false },
+              fontSize: 12,
+              fontFamily: 'var(--font-mono), SF Mono, monospace',
+              lineNumbers: 'on',
+              scrollBeyondLastLine: false,
+              renderLineHighlight: 'line',
+              tabSize: 2,
+              wordWrap: 'off',
+              padding: { top: 12, bottom: 12 },
+            }}
+            theme={monacoThemeFor(theme)}
+          />
+        </Suspense>
       </div>
     </div>
   )

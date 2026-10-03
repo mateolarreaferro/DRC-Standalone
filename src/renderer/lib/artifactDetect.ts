@@ -137,6 +137,29 @@ export function detect(content: string): DetectionResult | null {
   return extract(content, start)
 }
 
+/** CSD-only detect — ignores HTML/VST precedence. Used for Convert-to-Web-App turns. */
+export function detectCsd(content: string): DetectionResult | null {
+  const start = content.search(/<CsoundSynthesizer>/i)
+  if (start < 0) return null
+  const tail = content.slice(start)
+  const closeMatch = tail.match(/<\/CsoundSynthesizer\s*>/i)
+  if (closeMatch && closeMatch.index !== undefined) {
+    const end = start + closeMatch.index + closeMatch[0].length
+    return {
+      type: 'csd',
+      code: content.slice(start, end),
+      range: [start, end],
+      complete: true,
+    }
+  }
+  return {
+    type: 'csd',
+    code: tail,
+    range: [start, content.length],
+    complete: false,
+  }
+}
+
 // Remove the artifact region from a message so the chat bubble shows prose only.
 export function stripArtifact(content: string): string {
   const start = findStart(content)
